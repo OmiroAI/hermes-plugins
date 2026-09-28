@@ -283,6 +283,49 @@ def test_wholesale_shaped_transcript_copy_is_rejected_without_handoff_or_raw_sta
     assert transcript not in repr(record)
 
 
+def test_shaped_transcript_entries_split_across_handoff_fields_are_rejected_without_raw_state() -> None:
+    predecessor = "split-copy-predecessor"
+    raw_user = "user: PRIVATE RAW SOURCE ONE"
+    raw_assistant = "assistant: PRIVATE RAW SOURCE TWO"
+    copied_output = dict(VALID_HANDOFF, objective=raw_user, status=raw_assistant)
+    ctx = FakeContext(FakeLlm(SimpleNamespace(parsed=copied_output)))
+    _prepare(ctx, predecessor)
+    gateway = FakeGateway(
+        FakeDB(
+            {
+                predecessor: [
+                    {"role": "user", "content": "PRIVATE RAW SOURCE ONE"},
+                    {"role": "assistant", "content": "PRIVATE RAW SOURCE TWO"},
+                ]
+            }
+        )
+    )
+
+    assert on_pre_gateway_dispatch(ctx, event("route"), gateway, FakeSessionStore({"route": predecessor})) is None
+    record = ctx.state.values[handoff_record_key(predecessor)]
+    assert isinstance(record, dict)
+    assert record["attempted"] is True and record["consumed"] is True
+    assert "handoff" not in record and "rendered" not in record
+    assert raw_user not in repr(ctx.state.values)
+    assert raw_assistant not in repr(ctx.state.values)
+
+
+def test_shaped_transcript_entry_split_between_handoff_fields_is_rejected() -> None:
+    predecessor = "split-entry-predecessor"
+    raw_entry = "user: PRIVATE RAW SOURCE ONE"
+    copied_output = dict(VALID_HANDOFF, objective="user: PRIVATE RAW SOU", status="RCE ONE")
+    ctx = FakeContext(FakeLlm(SimpleNamespace(parsed=copied_output)))
+    _prepare(ctx, predecessor)
+    gateway = FakeGateway(FakeDB({predecessor: [{"role": "user", "content": "PRIVATE RAW SOURCE ONE"}]}))
+
+    assert on_pre_gateway_dispatch(ctx, event("route"), gateway, FakeSessionStore({"route": predecessor})) is None
+    record = ctx.state.values[handoff_record_key(predecessor)]
+    assert isinstance(record, dict)
+    assert record["attempted"] is True and record["consumed"] is True
+    assert "handoff" not in record and "rendered" not in record
+    assert raw_entry not in repr(ctx.state.values)
+
+
 def test_llm_exception_consumes_predecessor_without_retry_or_raw_state() -> None:
     predecessor = "exception-predecessor"
     ctx = FakeContext(FakeLlm(error=RuntimeError("llm unavailable")))

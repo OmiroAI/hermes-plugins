@@ -89,6 +89,9 @@ class TranscriptSource:
     text: str
     truncated: bool
     message_count: int
+    # Keep the selected role-prefixed entries separately so safety checks never
+    # need to guess boundaries from user-controlled content containing "\n\n".
+    entries: tuple[str, ...] = ()
 
 
 def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
@@ -267,6 +270,7 @@ def load_predecessor_transcript(
         text=text,
         truncated=len(selected_indices) < len(entries),
         message_count=len(selected_indices),
+        entries=tuple(entries[index][1] for index in selected_indices),
     )
 
 
@@ -346,16 +350,23 @@ def _validated_handoff(value: Any) -> dict[str, str | None] | None:
     return result
 
 
-def _contains_raw_transcript_copy(handoff: Mapping[str, str | None], transcript_text: str) -> bool:
-    """Reject a whole shaped source transcript embedded in any model field.
+def _contains_raw_transcript_copy(handoff: Mapping[str, str | None], transcript: TranscriptSource) -> bool:
+    """Reject exact role-prefixed source entries copied into one or more fields.
 
-    This intentionally compares the complete shaped transcript, rather than
-    individual snippets, so ordinary concise summaries that share source words
-    remain valid while wholesale transcript copies cannot reach state or a
-    rewrite.
+    An exact rendered entry (for example ``"user: source message"``) is the
+    minimum match: this prevents ordinary shared words or short phrases in a
+    factual summary from being rejected.  Entries are retained separately from
+    transcript text because content may itself contain transcript separators.
+    Checking each value catches one-field copies; checking their schema-order
+    concatenation also catches an entry split between handoff fields.
     """
-    return bool(transcript_text) and any(
-        transcript_text in field for field in handoff.values() if isinstance(field, str)
+    fields = tuple(field for field in handoff.values() if isinstance(field, str))
+    if not transcript.entries or not fields:
+        return False
+    combined_fields = "".join(fields)
+    return any(
+        entry in combined_fields or any(entry in field for field in fields)
+        for entry in transcript.entries
     )
 
 
@@ -461,7 +472,7 @@ def on_pre_gateway_dispatch(ctx: Any, event: Any, gateway: Any, session_store: A
             handoff = _validated_handoff(getattr(result, "parsed", None))
             if handoff is None:
                 return None
-            if _contains_raw_transcript_copy(handoff, transcript.text):
+            if _contains_raw_transcript_copy(handoff, transcript):
                 return None
             rendered_result = _render_handoff(handoff, int(settings["max_handoff_chars"]))
             if rendered_result is None:

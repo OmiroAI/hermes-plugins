@@ -224,6 +224,7 @@ def test_transcript_source_strips_nontext_tool_system_and_meta_payloads() -> Non
         text="user: Initial request\n\nassistant: First answer\n\nassistant: Final answer",
         truncated=False,
         message_count=3,
+        entries=("user: Initial request", "assistant: First answer", "assistant: Final answer"),
     )
     assert db.calls == ["old-session"]
 
@@ -245,6 +246,7 @@ def test_transcript_cap_keeps_initial_request_when_it_fits_and_preserves_order()
         text=initial + "\n\n" + newest,
         truncated=True,
         message_count=2,
+        entries=(initial, newest),
     )
 
 
@@ -280,6 +282,7 @@ def test_transcript_cap_keeps_only_a_contiguous_newest_suffix_before_initial_req
         text=initial + "\n\n" + newest_suffix,
         truncated=True,
         message_count=3,
+        entries=(initial, "assistant: recent one", "assistant: recent two"),
     )
 
 
