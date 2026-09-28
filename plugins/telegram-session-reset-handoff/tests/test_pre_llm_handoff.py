@@ -1,0 +1,286 @@
+"""Runtime-contract tests for the worker-side Telegram reset handoff."""
+
+from __future__ import annotations
+
+import sys
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+PLUGIN_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PLUGIN_DIR))
+import telegram_session_reset_handoff as handoff
+
+VALID = {
+    "objective": "Continue the implementation.",
+    "status": "Tests remain.",
+    "last_verified_action": "A check passed.",
+    "next_action_owner": "Engineer.",
+    "deadline_or_review": None,
+    "blocker_or_decision": None,
+    "source_note": "Prior Telegram session.",
+}
+
+
+class State:
+    def __init__(self, tmp_path):
+        self.values, self.data_dir = {}, tmp_path / "plugin-data"
+
+    def get(self, key, default=None):
+        return self.values.get(key, default)
+
+    def set(self, key, value):
+        self.values[key] = value
+
+
+class Llm:
+    def __init__(self, result=None, error=None):
+        self.result, self.error, self.calls = (
+            SimpleNamespace(parsed=VALID) if result is None else result,
+            error,
+            [],
+        )
+
+    def complete_structured(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return self.result
+
+
+class Ctx:
+    def __init__(self, tmp_path, llm=None):
+        self.state, self.llm, self.hooks = State(tmp_path), llm or Llm(), []
+
+    def get_config(self, key, default=None):
+        return default
+
+    def register_hook(self, name, callback):
+        self.hooks.append((name, callback))
+
+    def register_auxiliary_task(self, *args, **kwargs):
+        pass
+
+
+class DB:
+    def __init__(self, rows, messages):
+        self.rows, self.messages, self.closed = rows, messages, False
+
+    def get_session(self, sid):
+        return self.rows.get(sid)
+
+    def get_messages_as_conversation(self, sid):
+        return self.messages[sid]
+
+    def close(self):
+        self.closed = True
+
+
+def row(
+    sid,
+    *,
+    parent=None,
+    end=None,
+    source="telegram",
+    session_key="key",
+    chat_id="42",
+    chat_type="group",
+    thread_id="7",
+):
+    return {
+        "id": sid,
+        "parent_session_id": parent,
+        "end_reason": end,
+        "source": source,
+        "session_key": session_key,
+        "chat_id": chat_id,
+        "chat_type": chat_type,
+        "thread_id": thread_id,
+    }
+
+
+def setup(
+    monkeypatch,
+    tmp_path,
+    *,
+    end="idle",
+    current_overrides=None,
+    predecessor_overrides=None,
+    llm=None,
+):
+    old, new = (
+        row("old", end=end, **(predecessor_overrides or {})),
+        row("new", parent="old", **(current_overrides or {})),
+    )
+    db = DB(
+        {"old": old, "new": new},
+        {"old": [{"role": "user", "content": "private predecessor request"}]},
+    )
+    monkeypatch.setattr(handoff, "open_session_db", lambda: db)
+    return Ctx(tmp_path, llm), db
+
+
+def test_idle_and_daily_successor_injects_context_without_rewriting_current_message(
+    monkeypatch, tmp_path
+):
+    for end in ("idle", "daily"):
+        ctx, db = setup(monkeypatch, tmp_path / end, end=end)
+        result = handoff.on_pre_llm_call(
+            ctx,
+            session_id="new",
+            user_message="ORIGINAL USER INPUT",
+            conversation_history=[],
+            is_first_turn=True,
+            platform="telegram",
+            sender_id="sender",
+        )
+        assert result and set(result) == {"context"}
+        assert "ORIGINAL USER INPUT" not in result["context"]
+        assert len(ctx.llm.calls) == 1 and db.closed
+
+
+def test_route_isolation_requires_every_route_field(monkeypatch, tmp_path):
+    for field, value in (
+        ("thread_id", "other-topic"),
+        ("chat_type", "private"),
+        ("chat_id", "other-dm"),
+        ("session_key", "other-key"),
+    ):
+        ctx, _ = setup(monkeypatch, tmp_path / field, current_overrides={field: value})
+        assert (
+            handoff.on_pre_llm_call(
+                ctx,
+                session_id="new",
+                user_message="x",
+                conversation_history=[],
+                is_first_turn=True,
+                platform="telegram",
+            )
+            is None
+        )
+        assert not ctx.llm.calls
+
+
+def test_watcher_marker_allows_expired_predecessor_but_manual_marker_overrides(
+    monkeypatch, tmp_path
+):
+    ctx, _ = setup(monkeypatch, tmp_path, end="session_expired")
+    handoff.on_session_finalize(
+        ctx, platform="telegram", reason="session_expired", session_id="old"
+    )
+    assert handoff.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="x",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    )
+    ctx, _ = setup(monkeypatch, tmp_path / "manual", end="session_expired")
+    handoff.on_session_finalize(
+        ctx, platform="telegram", reason="session_expired", session_id="old"
+    )
+    handoff.on_session_finalize(
+        ctx, platform="telegram", reason="new_session", session_id="old"
+    )
+    assert (
+        handoff.on_pre_llm_call(
+            ctx,
+            session_id="new",
+            user_message="x",
+            conversation_history=[],
+            is_first_turn=True,
+            platform="telegram",
+        )
+        is None
+    )
+
+
+def test_bad_boundary_nonfirst_and_nontelegram_fail_open(monkeypatch, tmp_path):
+    for end, first, platform in (
+        ("compression", True, "telegram"),
+        ("suspended", True, "telegram"),
+        ("idle", False, "telegram"),
+        ("idle", True, "discord"),
+    ):
+        ctx, _ = setup(monkeypatch, tmp_path / f"{end}-{first}-{platform}", end=end)
+        assert (
+            handoff.on_pre_llm_call(
+                ctx,
+                session_id="new",
+                user_message="x",
+                conversation_history=[{"role": "user"}] if not first else [],
+                is_first_turn=first,
+                platform=platform,
+            )
+            is None
+        )
+        assert not ctx.llm.calls
+
+
+def test_no_gateway_hook_and_manifest_runtime_contract(tmp_path):
+    ctx = Ctx(tmp_path)
+    handoff.register(ctx)
+    assert [name for name, _ in ctx.hooks] == ["on_session_finalize", "pre_llm_call"]
+    assert not hasattr(handoff, "on_pre_gateway_dispatch")
+    manifest = (PLUGIN_DIR / "plugin.yaml").read_text()
+    assert (
+        "pre_gateway_dispatch" not in manifest
+        and "pre_llm_call" in manifest
+        and "0.21.0" in manifest
+    )
+
+
+def test_concurrent_calls_attempt_once_and_model_failure_is_terminal(
+    monkeypatch, tmp_path
+):
+    ctx, _ = setup(monkeypatch, tmp_path, llm=Llm(error=RuntimeError("down")))
+    results = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(
+                handoff.on_pre_llm_call(
+                    ctx,
+                    session_id="new",
+                    user_message="x",
+                    conversation_history=[],
+                    is_first_turn=True,
+                    platform="telegram",
+                )
+            )
+        )
+        for _ in range(2)
+    ]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert results == [None, None] and len(ctx.llm.calls) == 1
+    assert "private predecessor request" not in repr(ctx.state.values)
+
+
+def test_pruning_enforces_retention_and_record_count_without_raw_transcript(
+    monkeypatch, tmp_path
+):
+    ctx, _ = setup(monkeypatch, tmp_path)
+    settings = {"max_records": 1, "retention_days": 1}
+    index = {
+        "schema_version": 2,
+        "records": {"a" * 64: {"created_at": 0}, "b" * 64: {"created_at": 100_000}},
+    }
+    handoff._prune(index, settings, now=100_001)
+    assert index["records"] == {"b" * 64: {"created_at": 100_000}}
+    ctx.get_config = lambda key, default=None: settings.get(key, default)
+    handoff.on_session_finalize(
+        ctx, platform="telegram", reason="session_expired", session_id="old"
+    )
+    assert handoff.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="x",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    )
+    index = ctx.state.values[handoff.STATE_INDEX_KEY]
+    assert len(index["records"]) == 1 and "private predecessor request" not in repr(
+        index
+    )

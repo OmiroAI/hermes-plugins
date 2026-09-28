@@ -1,12 +1,14 @@
 name: telegram-session-reset-handoff
-version: 0.1.0
+version: 0.2.0
 manifest_version: 2
 api_version: 1
 license: MIT
-description: Prepare concise handoffs when Telegram conversations reset.
+description: Worker-side continuity handoffs for automatic Telegram session expiry resets.
+requires:
+  hermes: "==0.21.0"
 provides_hooks:
-  - pre_gateway_dispatch
   - on_session_finalize
+  - pre_llm_call
 config_schema:
   enabled:
     type: bool
@@ -17,22 +19,22 @@ config_schema:
     default: 24000
     minimum: 1000
     maximum: 50000
-    description: Maximum source transcript characters considered for a handoff.
+    description: Maximum predecessor user and assistant text considered for a handoff.
   max_handoff_chars:
     type: int
     default: 4500
     minimum: 250
     maximum: 4500
-    description: Maximum generated handoff characters retained per record.
+    description: Maximum generated handoff context retained per terminal record.
   retention_days:
     type: int
     default: 30
     minimum: 1
     maximum: 3650
-    description: Number of days to retain generated handoff records.
+    description: Retention period for compact hashed marker and terminal records.
   max_records:
     type: int
     default: 200
     minimum: 1
     maximum: 200
-    description: Maximum handoff records retained for the active profile.
+    description: Maximum compact hashed marker and terminal records retained.

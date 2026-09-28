@@ -1,17 +1,15 @@
 # Hermes Plugins
 
-A public collection of native [Hermes Agent](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins) plugins.
+Native plugin collection for **Hermes 0.21.0**.
 
-## Plugins
+## `telegram-session-reset-handoff`
 
-- `telegram-session-reset-handoff` — prepares concise handoffs for Telegram conversations that reset. It is scaffolding only in version 0.1.0 and is not enabled by this repository.
+Creates a one-time continuity summary for an automatic Telegram idle/daily reset (and watcher-first expiry case). It is **not auto-enabled** by this repository. See [its README](plugins/telegram-session-reset-handoff/README.md) for installation and enablement.
 
 ## Development
-
-The plugin runtime uses only the Python standard library. Run its tests with:
 
 ```bash
 uv run --with pytest python -m pytest plugins/telegram-session-reset-handoff/tests -q
 ```
 
-See each plugin's `plugin.yaml` for its public configuration schema.
+The plugin is version-coupled to the tested Hermes runtime, rather than claiming broad compatibility.
