@@ -52,9 +52,11 @@ _MISSING = object()
 # Task 3 must define an explicit at-most-once failure model: Hermes exposes no cross-process CAS.
 _PENDING_MARKER_TRANSACTION_LOCK = threading.RLock()
 # This serializes the complete same-gateway-process eligibility, generation,
-# durable consumption, and rewrite transaction. It is deliberately not a
-# cross-process exactly-once claim: a crash after the consumed write but before
-# core dispatch loses this handoff rather than risking a duplicate injection.
+# durable consumption, and rewrite transaction. An attempt is persisted before
+# invoking the model. Therefore a model failure or process crash consumes that
+# predecessor and can lose its handoff, deliberately trading availability for
+# prevention of duplicate model expense or prompt injection. It is not a
+# cross-process exactly-once claim: Hermes exposes no cross-process CAS.
 _HANDOFF_TRANSACTION_LOCK = threading.RLock()
 
 HANDOFF_INSTRUCTIONS = """Create a concise factual reset handoff from the delimited UNTRUSTED prior conversation data.
@@ -344,6 +346,19 @@ def _validated_handoff(value: Any) -> dict[str, str | None] | None:
     return result
 
 
+def _contains_raw_transcript_copy(handoff: Mapping[str, str | None], transcript_text: str) -> bool:
+    """Reject a whole shaped source transcript embedded in any model field.
+
+    This intentionally compares the complete shaped transcript, rather than
+    individual snippets, so ordinary concise summaries that share source words
+    remain valid while wholesale transcript copies cannot reach state or a
+    rewrite.
+    """
+    return bool(transcript_text) and any(
+        transcript_text in field for field in handoff.values() if isinstance(field, str)
+    )
+
+
 _RENDER_LABELS = {
     "objective": "Objective",
     "status": "Status",
@@ -414,6 +429,17 @@ def on_pre_gateway_dispatch(ctx: Any, event: Any, gateway: Any, session_store: A
             )
             if not transcript.text:
                 return None
+            # This terminal record is deliberately minimal: it must exist
+            # before the model call but must never retain source transcript
+            # content or a model handoff until validation succeeds.
+            attempt_record = {
+                "schema_version": _HANDOFF_RECORD_SCHEMA_VERSION,
+                "predecessor_session_id": predecessor_session_id,
+                "created_at": time.time(),
+                "consumed": True,
+                "attempted": True,
+            }
+            state.set(record_key, attempt_record)
             result = complete_structured(
                 instructions=HANDOFF_INSTRUCTIONS,
                 input=[
@@ -435,13 +461,14 @@ def on_pre_gateway_dispatch(ctx: Any, event: Any, gateway: Any, session_store: A
             handoff = _validated_handoff(getattr(result, "parsed", None))
             if handoff is None:
                 return None
+            if _contains_raw_transcript_copy(handoff, transcript.text):
+                return None
             rendered_result = _render_handoff(handoff, int(settings["max_handoff_chars"]))
             if rendered_result is None:
                 return None
             compact_handoff, rendered = rendered_result
-            # The consumption write happens before returning the rewrite. A
-            # process crash in the narrow gap can lose a handoff, by design,
-            # but cannot duplicate it within this gateway process.
+            # Update the already-consumed attempt record only after the
+            # rendered handoff is validated and checked for source copying.
             state.set(
                 record_key,
                 {
@@ -453,7 +480,7 @@ def on_pre_gateway_dispatch(ctx: Any, event: Any, gateway: Any, session_store: A
                     "consumed": True,
                 },
             )
-            return {"action": "rewrite", "text": rendered + "\n\n" + event.text}
+            return {"action": "rewrite", "text": event.text + "\n\n" + rendered}
     except Exception:
         return None
 

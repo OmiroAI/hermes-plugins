@@ -127,6 +127,7 @@ def test_registered_callback_rewrites_first_turn_once_and_consumes_record() -> N
 
     assert directive is not None
     assert directive["action"] == "rewrite"
+    assert directive["text"].startswith(original + "\n\n")
     assert directive["text"].count(original) == 1
     record = ctx.state.values[handoff_record_key(predecessor)]
     assert isinstance(record, dict)
@@ -191,7 +192,9 @@ def test_ineligible_or_failing_conditions_fail_open_without_rewrite() -> None:
 
     for ctx, inbound, gateway, store in cases:
         assert on_pre_gateway_dispatch(ctx, inbound, gateway, store) is None
-        assert not any(key.startswith("handoff:") for key in ctx.state.values)
+        # Model failures consume a predecessor before the call, but their
+        # terminal records never contain source transcript or handoff content.
+        assert "hello" not in repr(ctx.state.values)
 
 
 def test_prompt_treats_prior_transcript_as_delimited_untrusted_data() -> None:
@@ -253,3 +256,64 @@ def test_schema_rendering_obeys_exact_cap_and_never_persists_raw_transcript() ->
     assert set(record["handoff"]) == set(VALID_HANDOFF)
     assert transcript not in repr(record)
     assert transcript not in directive["text"]
+
+
+def test_wholesale_shaped_transcript_copy_is_rejected_without_handoff_or_raw_state() -> None:
+    predecessor = "copied-transcript-predecessor"
+    transcript = "user: Keep the full source transcript private.\n\nassistant: Confirmed."
+    copied_output = dict(VALID_HANDOFF, objective=f"Summary: {transcript}")
+    ctx = FakeContext(FakeLlm(SimpleNamespace(parsed=copied_output)))
+    _prepare(ctx, predecessor)
+    gateway = FakeGateway(
+        FakeDB(
+            {
+                predecessor: [
+                    {"role": "user", "content": "Keep the full source transcript private."},
+                    {"role": "assistant", "content": "Confirmed."},
+                ]
+            }
+        )
+    )
+
+    assert on_pre_gateway_dispatch(ctx, event("route"), gateway, FakeSessionStore({"route": predecessor})) is None
+    record = ctx.state.values[handoff_record_key(predecessor)]
+    assert isinstance(record, dict)
+    assert record["attempted"] is True and record["consumed"] is True
+    assert "handoff" not in record and "rendered" not in record
+    assert transcript not in repr(record)
+
+
+def test_llm_exception_consumes_predecessor_without_retry_or_raw_state() -> None:
+    predecessor = "exception-predecessor"
+    ctx = FakeContext(FakeLlm(error=RuntimeError("llm unavailable")))
+    _prepare(ctx, predecessor)
+    gateway = FakeGateway(FakeDB({predecessor: [{"role": "user", "content": "private source"}]}))
+    store = FakeSessionStore({"route": predecessor})
+
+    assert on_pre_gateway_dispatch(ctx, event("route"), gateway, store) is None
+    assert on_pre_gateway_dispatch(ctx, event("route"), gateway, store) is None
+
+    assert len(ctx.llm.calls) == 1
+    record = ctx.state.values[handoff_record_key(predecessor)]
+    assert isinstance(record, dict)
+    assert record["attempted"] is True and record["consumed"] is True
+    assert "handoff" not in record and "rendered" not in record
+    assert "private source" not in repr(record)
+
+
+def test_malformed_output_consumes_predecessor_without_retry_or_raw_state() -> None:
+    predecessor = "malformed-predecessor"
+    ctx = FakeContext(FakeLlm(SimpleNamespace(parsed={"objective": "only one field"})))
+    _prepare(ctx, predecessor)
+    gateway = FakeGateway(FakeDB({predecessor: [{"role": "user", "content": "private source"}]}))
+    store = FakeSessionStore({"route": predecessor})
+
+    assert on_pre_gateway_dispatch(ctx, event("route"), gateway, store) is None
+    assert on_pre_gateway_dispatch(ctx, event("route"), gateway, store) is None
+
+    assert len(ctx.llm.calls) == 1
+    record = ctx.state.values[handoff_record_key(predecessor)]
+    assert isinstance(record, dict)
+    assert record["attempted"] is True and record["consumed"] is True
+    assert "handoff" not in record and "rendered" not in record
+    assert "private source" not in repr(record)
