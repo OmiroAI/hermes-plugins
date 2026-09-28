@@ -515,6 +515,15 @@ def _canonicalize(value: str) -> str:
     return " ".join(without_format_characters.split()).casefold()
 
 
+def _identifier_scan(value: str) -> str:
+    """Normalize evasion characters for sensitive-identifier detection only."""
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFKC", value)
+        if unicodedata.category(char) != "Cf" and not char.isspace()
+    ).casefold()
+
+
 def _raw_copy(handoff: Mapping[str, str | None], transcript: TranscriptSource) -> bool:
     """Reject canonical verbatim copies, including copies split between fields.
 
@@ -535,8 +544,9 @@ def _contains_sensitive_identifier(handoff: Mapping[str, str | None]) -> bool:
         if text is None:
             continue
         scan = _canonicalize(text)
+        identifier_scan = _identifier_scan(text)
         if (
-            _EMAIL_RE.search(scan)
+            _EMAIL_RE.search(identifier_scan)
             or _PHONE_RE.search(scan)
             or _CREDENTIAL_RE.search(scan)
             or _CREDENTIAL_PREFIX_RE.search(scan)
