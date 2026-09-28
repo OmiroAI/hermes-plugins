@@ -14,11 +14,20 @@ DEFAULT_CONFIG = {
     "max_records": 200,
 }
 
+MIN_TRANSCRIPT_CHARS = 1_000
+MAX_TRANSCRIPT_CHARS = 50_000
+MIN_HANDOFF_CHARS = 250
+MAX_HANDOFF_CHARS = 4_500
+MIN_RETENTION_DAYS = 1
+MAX_RETENTION_DAYS = 3_650
+MIN_RECORDS = 1
+MAX_RECORDS = 200
+
 _LIMITS = {
-    "max_transcript_chars": (1_000, 200_000),
-    "max_handoff_chars": (250, 50_000),
-    "retention_days": (1, 3_650),
-    "max_records": (1, 10_000),
+    "max_transcript_chars": (MIN_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_CHARS),
+    "max_handoff_chars": (MIN_HANDOFF_CHARS, MAX_HANDOFF_CHARS),
+    "retention_days": (MIN_RETENTION_DAYS, MAX_RETENTION_DAYS),
+    "max_records": (MIN_RECORDS, MAX_RECORDS),
 }
 
 

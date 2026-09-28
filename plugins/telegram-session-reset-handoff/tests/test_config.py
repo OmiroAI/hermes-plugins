@@ -10,10 +10,89 @@ sys.path.insert(0, str(PLUGIN_DIR))
 
 from telegram_session_reset_handoff import (  # noqa: E402
     DEFAULT_CONFIG,
+    MAX_HANDOFF_CHARS,
+    MAX_RECORDS,
+    MAX_RETENTION_DAYS,
+    MAX_TRANSCRIPT_CHARS,
+    MIN_HANDOFF_CHARS,
+    MIN_RECORDS,
+    MIN_RETENTION_DAYS,
+    MIN_TRANSCRIPT_CHARS,
     normalize_config,
     profile_storage_path,
     register,
 )
+
+
+def _manifest_config_schema() -> dict[str, dict[str, bool | int | str]]:
+    """Parse this simple manifest schema using only the standard library."""
+    schema: dict[str, dict[str, bool | int | str]] = {}
+    current_key: str | None = None
+    in_schema = False
+    manifest = PLUGIN_DIR / "plugin.yaml"
+
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        if line == "config_schema:":
+            in_schema = True
+            continue
+        if not in_schema:
+            continue
+        if line and not line.startswith(" "):
+            break
+        if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
+            current_key = line.strip()[:-1]
+            schema[current_key] = {}
+            continue
+        if line.startswith("    ") and current_key is not None and ":" in line:
+            field, raw_value = line.strip().split(":", 1)
+            value = raw_value.strip()
+            if value in {"true", "false"}:
+                schema[current_key][field] = value == "true"
+            elif value.lstrip("-").isdigit():
+                schema[current_key][field] = int(value)
+            else:
+                schema[current_key][field] = value.removeprefix('"').removesuffix('"')
+
+    return schema
+
+
+def test_manifest_schema_matches_runtime_defaults_and_bounds() -> None:
+    assert MAX_HANDOFF_CHARS * MAX_RECORDS <= 900_000
+    assert _manifest_config_schema() == {
+        "enabled": {
+            "type": "bool",
+            "default": DEFAULT_CONFIG["enabled"],
+            "description": "Enable Telegram reset handoff processing.",
+        },
+        "max_transcript_chars": {
+            "type": "int",
+            "default": DEFAULT_CONFIG["max_transcript_chars"],
+            "minimum": MIN_TRANSCRIPT_CHARS,
+            "maximum": MAX_TRANSCRIPT_CHARS,
+            "description": "Maximum source transcript characters considered for a handoff.",
+        },
+        "max_handoff_chars": {
+            "type": "int",
+            "default": DEFAULT_CONFIG["max_handoff_chars"],
+            "minimum": MIN_HANDOFF_CHARS,
+            "maximum": MAX_HANDOFF_CHARS,
+            "description": "Maximum generated handoff characters retained per record.",
+        },
+        "retention_days": {
+            "type": "int",
+            "default": DEFAULT_CONFIG["retention_days"],
+            "minimum": MIN_RETENTION_DAYS,
+            "maximum": MAX_RETENTION_DAYS,
+            "description": "Number of days to retain generated handoff records.",
+        },
+        "max_records": {
+            "type": "int",
+            "default": DEFAULT_CONFIG["max_records"],
+            "minimum": MIN_RECORDS,
+            "maximum": MAX_RECORDS,
+            "description": "Maximum handoff records retained for the active profile.",
+        },
+    }
 
 
 def test_normalize_config_uses_documented_defaults() -> None:
@@ -38,10 +117,10 @@ def test_normalize_config_rejects_invalid_values_and_clamps_bounds() -> None:
         }
     ) == {
         "enabled": True,
-        "max_transcript_chars": 1000,
+        "max_transcript_chars": MIN_TRANSCRIPT_CHARS,
         "max_handoff_chars": 4500,
-        "retention_days": 3650,
-        "max_records": 1,
+        "retention_days": MAX_RETENTION_DAYS,
+        "max_records": MIN_RECORDS,
     }
 
 
@@ -52,14 +131,14 @@ def test_normalize_config_caps_character_limits() -> None:
             "max_transcript_chars": 999_999,
             "max_handoff_chars": 99_999,
             "retention_days": "45",
-            "max_records": "12",
+            "max_records": 999_999,
         }
     ) == {
         "enabled": False,
-        "max_transcript_chars": 200_000,
-        "max_handoff_chars": 50_000,
+        "max_transcript_chars": MAX_TRANSCRIPT_CHARS,
+        "max_handoff_chars": MAX_HANDOFF_CHARS,
         "retention_days": 45,
-        "max_records": 12,
+        "max_records": MAX_RECORDS,
     }
 
 

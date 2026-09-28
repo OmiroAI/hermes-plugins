@@ -15,16 +15,24 @@ config_schema:
   max_transcript_chars:
     type: int
     default: 24000
+    minimum: 1000
+    maximum: 50000
     description: Maximum source transcript characters considered for a handoff.
   max_handoff_chars:
     type: int
     default: 4500
+    minimum: 250
+    maximum: 4500
     description: Maximum generated handoff characters retained per record.
   retention_days:
     type: int
     default: 30
+    minimum: 1
+    maximum: 3650
     description: Number of days to retain generated handoff records.
   max_records:
     type: int
     default: 200
+    minimum: 1
+    maximum: 200
     description: Maximum handoff records retained for the active profile.
