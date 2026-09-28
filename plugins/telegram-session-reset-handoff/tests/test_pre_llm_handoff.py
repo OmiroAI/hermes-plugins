@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+import fcntl
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -339,6 +340,75 @@ def test_index_write_prunes_only_old_unused_lock_files(tmp_path):
         assert handoff._write_index(state, index, settings)
         assert not old_unused.exists()
         assert recent_unused.exists() and active_unused.exists() and retained_lock.exists()
+
+
+def test_pre_llm_held_predecessor_lock_fails_open_without_waiting_or_state(
+    monkeypatch, tmp_path
+):
+    ctx, _ = setup(monkeypatch, tmp_path)
+    lock_path = handoff._lock_path(ctx.state, "old")
+    assert lock_path is not None
+    lock_path.parent.mkdir(parents=True)
+    with lock_path.open("a+b") as owner:
+        fcntl.flock(owner.fileno(), fcntl.LOCK_EX)
+        started = time.monotonic()
+        assert handoff.on_pre_llm_call(
+            ctx,
+            session_id="new",
+            user_message="x",
+            conversation_history=[],
+            is_first_turn=True,
+            platform="telegram",
+        ) is None
+        assert time.monotonic() - started < 0.25
+        assert not ctx.llm.calls and ctx.state.values == {}
+
+    assert handoff.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="x",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    )
+    assert len(ctx.llm.calls) == 1
+
+
+def test_pre_llm_path_rewrites_legacy_record_to_allowlisted_metadata(monkeypatch, tmp_path):
+    ctx, _ = setup(monkeypatch, tmp_path)
+    key = handoff._digest("old")
+    ctx.state.values[handoff.STATE_INDEX_KEY] = {
+        "schema_version": 2,
+        "records": {
+            key: {
+                "created_at": 1.0,
+                "marker_expiry": True,
+                "attempted": False,
+                "consumed": False,
+                "handoff": "PRIVATE LEGACY SUMMARY",
+                "rendered": "PRIVATE LEGACY RENDERING",
+                "arbitrary": ["stale"],
+            }
+        },
+    }
+
+    assert handoff.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="x",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    )
+
+    record = ctx.state.values[handoff.STATE_INDEX_KEY]["records"][key]
+    assert record == {
+        "created_at": record["created_at"],
+        "marker_expiry": True,
+        "attempted": True,
+        "consumed": True,
+    }
+    assert "PRIVATE LEGACY" not in repr(ctx.state.values)
 
 
 @pytest.mark.parametrize(

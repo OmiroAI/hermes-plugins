@@ -39,6 +39,12 @@ STATE_INDEX_KEY = "handoff-state-v2"
 _STATE_VERSION = 2
 _REQUIRED_HERMES_VERSION = "0.21.0"
 _RECORD_LOCK = threading.RLock()
+_RECORD_BOOLEAN_FIELDS = (
+    "marker_expiry",
+    "marker_manual",
+    "attempted",
+    "consumed",
+)
 _FIELDS = (
     "objective",
     "status",
@@ -169,6 +175,34 @@ def _empty_index() -> dict[str, Any]:
     return {"schema_version": _STATE_VERSION, "records": {}}
 
 
+def _record_key(value: Any) -> str | None:
+    return (
+        value
+        if isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+        else None
+    )
+
+
+def _sanitize_record(value: Any) -> dict[str, float | bool]:
+    """Retain only non-content record metadata from current and legacy state."""
+    if not isinstance(value, Mapping):
+        return {}
+    record: dict[str, float | bool] = {}
+    created_at = value.get("created_at")
+    if (
+        isinstance(created_at, (int, float))
+        and not isinstance(created_at, bool)
+        and math.isfinite(created_at)
+    ):
+        record["created_at"] = created_at
+    for field in _RECORD_BOOLEAN_FIELDS:
+        if isinstance(value.get(field), bool):
+            record[field] = value[field]
+    return record
+
+
 def _read_index(state: Any) -> dict[str, Any] | None:
     try:
         raw = state.get(STATE_INDEX_KEY, None)
@@ -183,14 +217,13 @@ def _read_index(state: Any) -> dict[str, Any] | None:
     ):
         return None
     records = raw["records"]
-    if not all(
-        isinstance(k, str) and len(k) == 64 and isinstance(v, Mapping)
-        for k, v in records.items()
-    ):
+    if not all(_record_key(key) is not None and isinstance(value, Mapping) for key, value in records.items()):
         return None
     return {
         "schema_version": _STATE_VERSION,
-        "records": {str(k): dict(v) for k, v in records.items()},
+        "records": {
+            key: _sanitize_record(value) for key, value in records.items()
+        },
     }
 
 
@@ -291,7 +324,11 @@ def _predecessor_lock(state: Any, predecessor_id: str) -> Iterator[bool]:
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with path.open("a+b") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                yield False
+                return
             try:
                 yield True
             finally:
@@ -497,18 +534,19 @@ def _contains_sensitive_identifier(handoff: Mapping[str, str | None]) -> bool:
     for text in handoff.values():
         if text is None:
             continue
+        scan = _canonicalize(text)
         if (
-            _EMAIL_RE.search(text)
-            or _PHONE_RE.search(text)
-            or _CREDENTIAL_RE.search(text)
-            or _CREDENTIAL_PREFIX_RE.search(text)
-            or _JWT_RE.search(text)
-            or _BEARER_RE.search(text)
-            or _TELEGRAM_ROUTE_RE.search(text)
-            or _TELEGRAM_ROUTE_NATURAL_RE.search(text)
+            _EMAIL_RE.search(scan)
+            or _PHONE_RE.search(scan)
+            or _CREDENTIAL_RE.search(scan)
+            or _CREDENTIAL_PREFIX_RE.search(scan)
+            or _JWT_RE.search(scan)
+            or _BEARER_RE.search(scan)
+            or _TELEGRAM_ROUTE_RE.search(scan)
+            or _TELEGRAM_ROUTE_NATURAL_RE.search(scan)
         ):
             return True
-        for candidate in _IP_CANDIDATE_RE.findall(text):
+        for candidate in _IP_CANDIDATE_RE.findall(scan):
             try:
                 ipaddress.ip_address(candidate.strip("[]"))
             except ValueError:
