@@ -4,8 +4,7 @@ manifest_version: 2
 api_version: 1
 license: MIT
 description: Worker-side continuity handoffs for automatic Telegram session expiry resets.
-requires:
-  hermes: "==0.21.0"
+requires_hermes: "==0.21.0"
 provides_hooks:
   - on_session_finalize
   - pre_llm_call

@@ -9,6 +9,8 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import math
+import os
+import stat
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
@@ -28,6 +30,7 @@ MIN_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_CHARS = 1_000, 50_000
 MIN_HANDOFF_CHARS, MAX_HANDOFF_CHARS = 250, 4_500
 MIN_RETENTION_DAYS, MAX_RETENTION_DAYS = 1, 3_650
 MIN_RECORDS, MAX_RECORDS = 1, 200
+RAW_CONTENT_COPY_MIN_CHARS = 24
 STATE_INDEX_KEY = "handoff-state-v2"
 _STATE_VERSION = 2
 _RECORD_LOCK = threading.RLock()
@@ -65,6 +68,7 @@ class TranscriptSource:
     truncated: bool
     message_count: int
     entries: tuple[str, ...] = ()
+    contents: tuple[str, ...] = ()
 
 
 def _bounded(value: Any, default: int, lower: int, upper: int) -> int:
@@ -185,8 +189,10 @@ def _write_index(
     state: Any, index: dict[str, Any], settings: Mapping[str, bool | int]
 ) -> bool:
     try:
-        _prune(index, settings, time.time())
+        now = time.time()
+        _prune(index, settings, now)
         state.set(STATE_INDEX_KEY, index)
+        _prune_lock_files(state, index, settings, now)
         return True
     except Exception:
         return False
@@ -208,6 +214,47 @@ def _lock_path(state: Any, predecessor_id: str) -> Path | None:
     except OSError:
         return None
     return candidate
+
+
+def _prune_lock_files(
+    state: Any, index: Mapping[str, Any], settings: Mapping[str, bool | int], now: float
+) -> None:
+    """Remove only stale, unreferenced lock files whose exclusive lock is free."""
+    root = getattr(state, "data_dir", None)
+    if not isinstance(root, (str, Path)):
+        return
+    lock_dir = Path(root) / "telegram-session-reset-handoff-locks"
+    try:
+        root_path, resolved = Path(root).resolve(), lock_dir.resolve()
+        if root_path not in resolved.parents or not lock_dir.is_dir():
+            return
+        retained = set(index["records"])
+        cutoff = now - int(settings["retention_days"]) * 86400
+        for path in lock_dir.iterdir():
+            name = path.name
+            if (
+                not name.startswith("handoff-")
+                or not name.endswith(".lock")
+                or len(name) != len("handoff-") + 64 + len(".lock")
+            ):
+                continue
+            key = name[len("handoff-") : -len(".lock")]
+            if key in retained or any(char not in "0123456789abcdef" for char in key):
+                continue
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_mtime >= cutoff:
+                continue
+            with path.open("a+b") as handle:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue
+                try:
+                    os.unlink(path)
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except (KeyError, OSError, TypeError, ValueError):
+        return
 
 
 @contextmanager
@@ -303,9 +350,9 @@ def read_pending_marker(
         return None
 
 
-def _text_entries(messages: Sequence[Any]) -> list[str]:
+def _text_entries(messages: Sequence[Any]) -> list[tuple[str, str]]:
     return [
-        f"{item['role']}: {item['content']}"
+        (f"{item['role']}: {item['content']}", item["content"])
         for item in messages
         if isinstance(item, Mapping)
         and item.get("role") in {"user", "assistant"}
@@ -323,20 +370,28 @@ def load_predecessor_transcript(
         )
     except Exception:
         return TranscriptSource("", False, 0)
-    selected: list[str] = []
+    selected: list[tuple[str, str]] = []
     for entry in reversed(entries):
-        candidate = entry if not selected else entry + "\n\n" + "\n\n".join(selected)
+        candidate = (
+            entry[0]
+            if not selected
+            else entry[0] + "\n\n" + "\n\n".join(value[0] for value in selected)
+        )
         if len(candidate) > max_chars:
             break
         selected.insert(0, entry)
-    text = "\n\n".join(selected)
+    text = "\n\n".join(value[0] for value in selected)
     return TranscriptSource(
-        text, len(selected) < len(entries), len(selected), tuple(selected)
+        text,
+        len(selected) < len(entries),
+        len(selected),
+        tuple(value[0] for value in selected),
+        tuple(value[1] for value in selected),
     )
 
 
 def open_session_db() -> Any:
-    """Narrow Hermes 0.21.0 adapter: read-only default-profile SessionDB."""
+    """Read-only SessionDB resolved by Hermes from the active profile home."""
     from hermes_state import SessionDB
 
     return SessionDB(read_only=True)
@@ -376,8 +431,14 @@ def _validated_handoff(value: Any) -> dict[str, str | None] | None:
 
 
 def _raw_copy(handoff: Mapping[str, str | None], transcript: TranscriptSource) -> bool:
-    joined = "".join(v for v in handoff.values() if isinstance(v, str))
-    return any(entry in joined for entry in transcript.entries)
+    # Role-prefixed entries are always prohibited.  The 24-character raw-content
+    # threshold prevents common short phrases from becoming false positives.
+    joined = "".join(handoff[field] or "" for field in _FIELDS)
+    return any(entry in joined for entry in transcript.entries) or any(
+        content in joined
+        for content in transcript.contents
+        if len(content) >= RAW_CONTENT_COPY_MIN_CHARS
+    )
 
 
 def _render(

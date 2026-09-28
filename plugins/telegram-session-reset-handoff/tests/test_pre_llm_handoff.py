@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -218,6 +219,24 @@ def test_bad_boundary_nonfirst_and_nontelegram_fail_open(monkeypatch, tmp_path):
         assert not ctx.llm.calls
 
 
+def test_session_db_adapter_failure_fails_open(monkeypatch, tmp_path):
+    ctx, _ = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        handoff,
+        "open_session_db",
+        lambda: (_ for _ in ()).throw(RuntimeError("active profile database unavailable")),
+    )
+    assert handoff.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="x",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    ) is None
+    assert not ctx.llm.calls
+
+
 def test_no_gateway_hook_and_manifest_runtime_contract(tmp_path):
     ctx = Ctx(tmp_path)
     handoff.register(ctx)
@@ -227,7 +246,8 @@ def test_no_gateway_hook_and_manifest_runtime_contract(tmp_path):
     assert (
         "pre_gateway_dispatch" not in manifest
         and "pre_llm_call" in manifest
-        and "0.21.0" in manifest
+        and 'requires_hermes: "==0.21.0"' in manifest
+        and "\nrequires:\n" not in manifest
     )
 
 
@@ -284,3 +304,31 @@ def test_pruning_enforces_retention_and_record_count_without_raw_transcript(
     assert len(index["records"]) == 1 and "private predecessor request" not in repr(
         index
     )
+
+
+def test_index_write_prunes_only_old_unused_lock_files(tmp_path):
+    state = State(tmp_path)
+    settings = {"max_records": 1, "retention_days": 1}
+    retained = handoff._digest("retained")
+    old_unused = handoff._lock_path(state, "old-unused")
+    recent_unused = handoff._lock_path(state, "recent-unused")
+    active_unused = handoff._lock_path(state, "active-unused")
+    retained_lock = handoff._lock_path(state, "retained")
+    assert all((old_unused, recent_unused, active_unused, retained_lock))
+    for path in (old_unused, recent_unused, active_unused, retained_lock):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    old = time.time() - 2 * 86400
+    for path in (old_unused, active_unused, retained_lock):
+        path.touch()
+        import os
+
+        os.utime(path, (old, old))
+    with active_unused.open("a+b") as handle:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        index = {"schema_version": 2, "records": {retained: {"created_at": time.time()}}}
+        assert handoff._write_index(state, index, settings)
+        assert not old_unused.exists()
+        assert recent_unused.exists() and active_unused.exists() and retained_lock.exists()

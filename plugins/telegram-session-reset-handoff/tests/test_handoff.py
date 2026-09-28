@@ -105,6 +105,58 @@ def test_raw_transcript_copy_is_rejected_and_never_persisted(monkeypatch, tmp_pa
     )
 
 
+def test_unprefixed_long_raw_content_is_rejected_across_handoff_fields(monkeypatch, tmp_path):
+    raw = "UNIQUE UNPREFIXED PREDECESSOR CONTENT THAT MUST NEVER SURVIVE"
+    db = DB()
+    db.get_messages_as_conversation = lambda _: [{"role": "user", "content": raw}]
+    monkeypatch.setattr(h, "open_session_db", lambda: db)
+    llm = Llm(
+        dict(
+            VALID,
+            objective=raw[:31],
+            status=raw[31:],
+        )
+    )
+    ctx = SimpleNamespace(
+        state=State(tmp_path), llm=llm, get_config=lambda k, d=None: d
+    )
+    assert h.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="real current input",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    ) is None
+    record = ctx.state.values[h.STATE_INDEX_KEY]["records"][h._digest("old")]
+    assert record["attempted"] is True and "handoff" not in record
+    assert raw not in repr(ctx.state.values)
+
+
+def test_unprefixed_long_raw_content_is_rejected_within_one_handoff_field(
+    monkeypatch, tmp_path
+):
+    raw = "UNIQUE UNPREFIXED PREDECESSOR CONTENT THAT MUST NEVER SURVIVE"
+    db = DB()
+    db.get_messages_as_conversation = lambda _: [{"role": "assistant", "content": raw}]
+    monkeypatch.setattr(h, "open_session_db", lambda: db)
+    ctx = SimpleNamespace(
+        state=State(tmp_path),
+        llm=Llm(dict(VALID, objective=raw)),
+        get_config=lambda k, d=None: d,
+    )
+    assert h.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="real current input",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    ) is None
+    record = ctx.state.values[h.STATE_INDEX_KEY]["records"][h._digest("old")]
+    assert "handoff" not in record and raw not in repr(ctx.state.values)
+
+
 def test_transcript_loads_only_user_assistant_and_caps_newest_suffix():
     db = SimpleNamespace(
         get_messages_as_conversation=lambda _: [
@@ -118,3 +170,4 @@ def test_transcript_loads_only_user_assistant_and_caps_newest_suffix():
         db, "old", max_chars=len("assistant: newest")
     )
     assert source.entries == ("assistant: newest",) and source.truncated
+    assert source.contents == ("newest",)
