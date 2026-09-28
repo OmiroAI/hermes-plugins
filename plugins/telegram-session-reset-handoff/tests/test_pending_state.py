@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import threading
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_DIR))
 
 from telegram_session_reset_handoff import (  # noqa: E402
     TranscriptSource,
+    create_pending_marker,
     load_predecessor_transcript,
     on_session_finalize,
     pending_marker_key,
@@ -31,6 +33,38 @@ class FakeState:
     def set(self, key: str, value: object) -> None:
         self.set_calls.append((key, value))
         self.values[key] = value
+
+
+class BlockingState(FakeState):
+    """State double that holds the first read open until the test releases it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_get_entered = threading.Event()
+        self.second_get_entered = threading.Event()
+        self.release_first_get = threading.Event()
+        self.transaction_events: list[str] = []
+        self._guard = threading.Lock()
+        self._get_count = 0
+
+    def get(self, key: str, default: object = None) -> object:
+        with self._guard:
+            self._get_count += 1
+            get_count = self._get_count
+            self.transaction_events.append("get")
+            self.get_calls.append((key, default))
+        if get_count == 1:
+            self.first_get_entered.set()
+            assert self.release_first_get.wait(timeout=2), "test did not release the first read"
+        else:
+            self.second_get_entered.set()
+        return self.values.get(key, default)
+
+    def set(self, key: str, value: object) -> None:
+        with self._guard:
+            self.transaction_events.append("set")
+            self.set_calls.append((key, value))
+            self.values[key] = value
 
 
 class Context:
@@ -82,6 +116,35 @@ def test_valid_finalization_creates_an_idempotent_pending_marker() -> None:
     assert marker["old_session_id"] == "old-session-1"
     assert isinstance(marker["created_at"], float)
     assert marker["pending"] is True
+
+
+def test_concurrent_pending_marker_creation_serializes_get_set_transaction() -> None:
+    state = BlockingState()
+    results: list[bool | None] = [None, None]
+
+    def create(index: int) -> None:
+        results[index] = create_pending_marker(state, "shared-predecessor")
+
+    first = threading.Thread(target=create, args=(0,))
+    second = threading.Thread(target=create, args=(1,))
+    first.start()
+    assert state.first_get_entered.wait(timeout=2), "first call did not reach state.get"
+    second.start()
+    try:
+        assert not state.second_get_entered.wait(timeout=0.2), (
+            "second state.get interleaved before the first call completed its state.set"
+        )
+    finally:
+        state.release_first_get.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert results == [True, True]
+    assert state.transaction_events == ["get", "set", "get", "set"]
+    assert read_pending_marker(state, "shared-predecessor") is not None
+    assert len(state.values) == 1
 
 
 def test_registers_context_bound_finalize_callback() -> None:

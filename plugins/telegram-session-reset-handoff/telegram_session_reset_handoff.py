@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import math
 from pathlib import Path
+import threading
 import time
 from typing import Any
 
@@ -30,6 +31,9 @@ PENDING_MARKER_SCHEMA_VERSION = 1
 _PENDING_MARKER_PREFIX = "pending:"
 _PENDING_MARKER_FIELDS = frozenset({"schema_version", "old_session_id", "created_at", "pending"})
 _MISSING = object()
+# Serializes same-gateway-process callbacks; ctx.state.set supplies the atomic durable write.
+# Hermes exposes no cross-process transaction for the get/validate/set sequence.
+_PENDING_MARKER_TRANSACTION_LOCK = threading.RLock()
 
 _LIMITS = {
     "max_transcript_chars": (MIN_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_CHARS),
@@ -121,24 +125,26 @@ def read_pending_marker(state: Any, predecessor_session_id: str) -> dict[str, An
 
 
 def create_pending_marker(state: Any, predecessor_session_id: str) -> bool:
-    """Atomically create or refresh one minimal pending marker through ``ctx.state``."""
+    """Create or validate-and-refresh a pending marker without raising."""
     if not isinstance(predecessor_session_id, str) or not predecessor_session_id:
         return False
     try:
-        key = pending_marker_key(predecessor_session_id)
-        existing = state.get(key, _MISSING)
-        if existing is _MISSING:
-            marker = {
-                "schema_version": PENDING_MARKER_SCHEMA_VERSION,
-                "old_session_id": predecessor_session_id,
-                "created_at": time.time(),
-                "pending": True,
-            }
-        else:
-            marker = _valid_pending_marker(existing, predecessor_session_id)
-            if marker is None:
-                return False
-        state.set(key, marker)
+        # Keep validation and the durable write in one process-local transaction.
+        with _PENDING_MARKER_TRANSACTION_LOCK:
+            key = pending_marker_key(predecessor_session_id)
+            existing = state.get(key, _MISSING)
+            if existing is _MISSING:
+                marker = {
+                    "schema_version": PENDING_MARKER_SCHEMA_VERSION,
+                    "old_session_id": predecessor_session_id,
+                    "created_at": time.time(),
+                    "pending": True,
+                }
+            else:
+                marker = _valid_pending_marker(existing, predecessor_session_id)
+                if marker is None:
+                    return False
+            state.set(key, marker)
     except Exception:
         return False
     return True
