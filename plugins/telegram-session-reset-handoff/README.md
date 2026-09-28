@@ -22,6 +22,8 @@ A predecessor-specific `fcntl.flock` plus a durable terminal attempt record give
 
 Only bounded predecessor **user and assistant text** is sent to the currently configured model to make the summary. Nothing is externally messaged. The raw transcript is never persisted in plugin state; model output is rejected if it copies role-prefixed raw entries (including cross-field copies), or an unprefixed source-content entry of 24 or more characters. The threshold avoids rejecting short commonplace overlap.
 
+Accepted output also passes a deterministic privacy guard before it is rendered, returned, or written to state. It rejects the entire handoff (without redaction) if any field contains an email address, telephone number, credential/token-like value, IPv4/IPv6 address, or explicit Telegram-style chat/topic/thread/session ID. A rejection retains only the terminal attempted/consumed record, with no handoff or rendered text persisted.
+
 State is a compact index plus a bounded dedicated lock directory. The index contains only hashes of predecessor session IDs, timestamps, markers, terminal status, and accepted summary data—never chat IDs or topic IDs. On marker and terminal writes the index is pruned by `retention_days` and `max_records`; old unreferenced lock files are then removed only after a nonblocking exclusive lock succeeds. Remove the plugin's profile `plugin-data` directory to erase this state on uninstall (after disabling/removing the plugin); deleting it also removes retained handoffs, markers, and locks.
 
 ## Settings

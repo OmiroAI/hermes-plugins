@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_DIR))
 import telegram_session_reset_handoff as h
@@ -103,6 +105,71 @@ def test_raw_transcript_copy_is_rejected_and_never_persisted(monkeypatch, tmp_pa
         and "handoff" not in record
         and "PRIVATE RAW SOURCE" not in repr(ctx.state.values)
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "sensitive"),
+    (
+        ("next_action_owner", "+1-202-555-0188"),
+        ("status", "owner@example.test"),
+        ("source_note", "chat_id: -1001234567890"),
+        ("source_note", '"thread_id": "987654321"'),
+        ("blocker_or_decision", "api_key=sk-abcdefghijklmnopqrstuvwxyz012345"),
+        ("deadline_or_review", "connect to 192.0.2.25"),
+        ("last_verified_action", "peer is 2001:db8::1"),
+    ),
+)
+def test_sensitive_model_output_is_terminal_and_never_persisted_or_returned(
+    monkeypatch, tmp_path, field, sensitive
+):
+    db = DB()
+    monkeypatch.setattr(h, "open_session_db", lambda: db)
+    ctx = SimpleNamespace(
+        state=State(tmp_path),
+        llm=Llm(dict(VALID, **{field: sensitive})),
+        get_config=lambda k, d=None: d,
+    )
+
+    assert h.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="real current input",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    ) is None
+
+    record = ctx.state.values[h.STATE_INDEX_KEY]["records"][h._digest("old")]
+    assert record["attempted"] is True and record["consumed"] is True
+    assert "handoff" not in record and "rendered" not in record
+    assert sensitive not in repr(ctx.state.values)
+
+
+def test_normal_owner_and_action_summary_is_accepted(monkeypatch, tmp_path):
+    db = DB()
+    monkeypatch.setattr(h, "open_session_db", lambda: db)
+    accepted = dict(
+        VALID,
+        objective="Prepare the release checklist.",
+        status="Code review is complete.",
+        next_action_owner="Aileen to approve the rollout plan.",
+    )
+    ctx = SimpleNamespace(
+        state=State(tmp_path), llm=Llm(accepted), get_config=lambda k, d=None: d
+    )
+
+    result = h.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="real current input",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    )
+
+    assert result and "Aileen to approve the rollout plan." in result["context"]
+    record = ctx.state.values[h.STATE_INDEX_KEY]["records"][h._digest("old")]
+    assert record["handoff"] == accepted and record["rendered"] == result["context"]
 
 
 def test_unprefixed_long_raw_content_is_rejected_across_handoff_fields(monkeypatch, tmp_path):
