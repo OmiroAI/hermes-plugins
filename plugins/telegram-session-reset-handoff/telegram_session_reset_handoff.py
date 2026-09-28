@@ -31,8 +31,8 @@ PENDING_MARKER_SCHEMA_VERSION = 1
 _PENDING_MARKER_PREFIX = "pending:"
 _PENDING_MARKER_FIELDS = frozenset({"schema_version", "old_session_id", "created_at", "pending"})
 _MISSING = object()
-# Serializes same-gateway-process callbacks; ctx.state.set supplies the atomic durable write.
-# Hermes exposes no cross-process transaction for the get/validate/set sequence.
+# This lock covers same-gateway-process state transitions only.
+# Task 3 must define an explicit at-most-once failure model: Hermes exposes no cross-process CAS.
 _PENDING_MARKER_TRANSACTION_LOCK = threading.RLock()
 
 _LIMITS = {
@@ -200,41 +200,46 @@ def load_predecessor_transcript(
         return TranscriptSource(text="", truncated=False, message_count=0)
 
     entries = _text_entries(messages)
-    selected: set[int] = set()
-
-    def rendered(indices: set[int]) -> str:
-        return "\n\n".join(entries[index][1] for index in sorted(indices))
+    separator = "\n\n"
 
     initial_user_index = next(
         (index for index, (role, _) in enumerate(entries) if role == "user"), None
     )
-    if initial_user_index is not None and len(entries[initial_user_index][1]) <= max_chars:
-        selected.add(initial_user_index)
-
+    suffix_start = len(entries)
+    suffix_text = ""
     for index in range(len(entries) - 1, -1, -1):
-        if index in selected:
-            continue
-        candidate = selected | {index}
-        if len(rendered(candidate)) <= max_chars:
-            selected = candidate
+        candidate = entries[index][1] if not suffix_text else entries[index][1] + separator + suffix_text
+        if len(candidate) > max_chars:
+            break
+        suffix_start = index
+        suffix_text = candidate
 
-    text = rendered(selected)
+    selected_indices = list(range(suffix_start, len(entries)))
+    if (
+        suffix_text
+        and initial_user_index is not None
+        and initial_user_index < suffix_start
+        and len(entries[initial_user_index][1] + separator + suffix_text) <= max_chars
+    ):
+        selected_indices.insert(0, initial_user_index)
+
+    text = separator.join(entries[index][1] for index in selected_indices)
     return TranscriptSource(
         text=text,
-        truncated=len(selected) < len(entries),
-        message_count=len(selected),
+        truncated=len(selected_indices) < len(entries),
+        message_count=len(selected_indices),
     )
 
 
-def on_pre_gateway_dispatch(ctx: Any, event: Any, gateway: Any, session_store: Any, **kwargs: Any) -> None:
+def on_pre_gateway_dispatch(ctx: Any, event: Any, gateway: Any, session_store: Any, **kwargs: Any) -> Any:
     """Placeholder for the reset-message rewrite implemented in a later task."""
     return None
 
 
 def register(ctx: Any) -> None:
     """Register context-bound public lifecycle integration points."""
-    def pre_gateway_dispatch_callback(*args: Any, **kwargs: Any) -> None:
-        on_pre_gateway_dispatch(ctx, *args, **kwargs)
+    def pre_gateway_dispatch_callback(*args: Any, **kwargs: Any) -> Any:
+        return on_pre_gateway_dispatch(ctx, *args, **kwargs)
 
     def session_finalize_callback(**kwargs: Any) -> None:
         on_session_finalize(ctx, **kwargs)

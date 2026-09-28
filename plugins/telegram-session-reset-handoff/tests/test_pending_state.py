@@ -248,6 +248,41 @@ def test_transcript_cap_keeps_initial_request_when_it_fits_and_preserves_order()
     )
 
 
+def test_transcript_cap_never_skips_newest_oversized_entry_for_stale_messages() -> None:
+    db = FakeDB(
+        [
+            {"role": "user", "content": "old initial request"},
+            {"role": "assistant", "content": "stale but short"},
+            {"role": "assistant", "content": "newest entry is too large"},
+        ]
+    )
+
+    source = load_predecessor_transcript(db, "old-session", max_chars=len("assistant: stale but short"))
+
+    assert source == TranscriptSource(text="", truncated=True, message_count=0)
+
+
+def test_transcript_cap_keeps_only_a_contiguous_newest_suffix_before_initial_request() -> None:
+    initial = "user: initial request"
+    newest_suffix = "assistant: recent one\n\nassistant: recent two"
+    db = FakeDB(
+        [
+            {"role": "user", "content": "initial request"},
+            {"role": "assistant", "content": "stale entry that must not be retained"},
+            {"role": "assistant", "content": "recent one"},
+            {"role": "assistant", "content": "recent two"},
+        ]
+    )
+
+    source = load_predecessor_transcript(db, "old-session", max_chars=len(initial + "\n\n" + newest_suffix))
+
+    assert source == TranscriptSource(
+        text=initial + "\n\n" + newest_suffix,
+        truncated=True,
+        message_count=3,
+    )
+
+
 def test_database_error_fails_open_without_transcript_content() -> None:
     db = FakeDB([], error=RuntimeError("database unavailable"))
 

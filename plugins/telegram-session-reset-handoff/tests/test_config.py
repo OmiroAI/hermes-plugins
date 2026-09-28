@@ -22,6 +22,7 @@ from telegram_session_reset_handoff import (  # noqa: E402
     profile_storage_path,
     register,
 )
+import telegram_session_reset_handoff as handoff  # noqa: E402
 
 
 def _manifest_config_schema() -> dict[str, dict[str, bool | int | str]]:
@@ -179,3 +180,31 @@ def test_registers_gateway_dispatch_finalize_and_namespaced_auxiliary_task() -> 
             },
         )
     ]
+
+
+def test_registered_gateway_dispatch_callback_propagates_rewrite_directive(monkeypatch: object) -> None:
+    class Context:
+        def __init__(self) -> None:
+            self.hooks: list[tuple[str, object]] = []
+
+        def register_hook(self, name: str, callback: object) -> None:
+            self.hooks.append((name, callback))
+
+        def register_auxiliary_task(self, name: str, **kwargs: str) -> None:
+            pass
+
+    ctx = Context()
+    directive = {"replace_event": {"text": "rewritten"}}
+
+    def fake_pre_gateway_dispatch(*args: object, **kwargs: object) -> object:
+        assert args == (ctx, "event", "gateway", "session-store")
+        assert kwargs == {"trace_id": "trace"}
+        return directive
+
+    monkeypatch.setattr(handoff, "on_pre_gateway_dispatch", fake_pre_gateway_dispatch)
+    register(ctx)
+
+    callbacks = dict(ctx.hooks)
+    assert callbacks["pre_gateway_dispatch"](
+        "event", "gateway", "session-store", trace_id="trace"
+    ) is directive
