@@ -259,6 +259,15 @@ def test_no_gateway_hook_and_manifest_runtime_contract(tmp_path):
     )
 
 
+def test_register_skips_handoffs_when_posix_locks_are_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(handoff, "_fcntl", None)
+    ctx = Ctx(tmp_path)
+
+    handoff.register(ctx)
+
+    assert ctx.hooks == []
+
+
 def test_concurrent_calls_attempt_once_and_model_failure_is_terminal(
     monkeypatch, tmp_path
 ):

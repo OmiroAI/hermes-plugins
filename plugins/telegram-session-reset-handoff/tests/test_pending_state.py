@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -40,6 +42,74 @@ class Ctx:
 
     def get_config(self, k, d=None):
         return d
+
+
+class FileState(State):
+    def __init__(self, tmp_path):
+        super().__init__(tmp_path)
+        self.path = self.data_dir / "state.json"
+
+    def get(self, key, default=None):
+        try:
+            return json.loads(self.path.read_text())[key]
+        except (FileNotFoundError, KeyError):
+            return default
+
+    def set(self, key, value):
+        data = json.loads(self.path.read_text()) if self.path.exists() else {}
+        data[key] = value
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(data))
+
+
+def test_normal_execution_purges_legacy_state_file_without_dropping_metadata(tmp_path):
+    state = FileState(tmp_path)
+    legacy_id = "legacy-session-id"
+    metadata_key = handoff._digest("current")
+    created_at = time.time()
+    state.path.parent.mkdir(parents=True, exist_ok=True)
+    state.path.write_text(
+        json.dumps(
+            {
+                "pending:" + handoff._digest(legacy_id): {
+                    "old_session_id": legacy_id,
+                    "pending": True,
+                },
+                "handoff:" + handoff._digest(legacy_id): {
+                    "old_session_id": legacy_id,
+                    "rendered": "PRIVATE LEGACY SUMMARY",
+                },
+                STATE_INDEX_KEY: {
+                    "schema_version": 2,
+                    "records": {
+                        metadata_key: {
+                            "created_at": created_at,
+                            "marker_expiry": True,
+                            "attempted": False,
+                            "handoff": {"objective": "PRIVATE LEGACY SUMMARY"},
+                            "rendered": "PRIVATE LEGACY SUMMARY",
+                        }
+                    },
+                },
+            }
+        )
+    )
+    ctx = Ctx(tmp_path)
+    ctx.state = state
+
+    on_session_finalize(
+        ctx, platform="telegram", reason="session_expired", session_id="unrelated"
+    )
+
+    stored = state.path.read_text()
+    parsed = json.loads(stored)
+    assert legacy_id not in stored and "PRIVATE LEGACY SUMMARY" not in stored
+    assert not any(key.startswith(("pending:", "handoff:")) for key in parsed)
+    assert parsed[STATE_INDEX_KEY]["records"][metadata_key] == {
+        "created_at": created_at,
+        "marker_expiry": True,
+        "attempted": False,
+    }
 
 
 def test_read_index_allowlists_only_finite_metadata(tmp_path):

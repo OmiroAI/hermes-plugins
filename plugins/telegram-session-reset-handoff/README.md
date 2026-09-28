@@ -16,7 +16,7 @@ The plugin registers `on_session_finalize` and `pre_llm_call`, not `pre_gateway_
 
 Eligibility requires Telegram, a first turn, an explicit `parent_session_id`, exact equality of `source`, `session_key`, `chat_id`, `chat_type`, and `thread_id`, plus predecessor reason `idle`/`daily` or a watcher expiry marker. A `/new` or `/reset` (`new_session`) marker overrides expiry and rejects the handoff. Compression, suspension, resume-pending, and other end reasons do not qualify.
 
-A predecessor-specific `fcntl.flock` plus a durable terminal attempt record gives at-most-once behavior across processes. The attempt is consumed before model work. A crash or model failure can therefore lose a handoff, intentionally avoiding duplicate model calls.
+A predecessor-specific `fcntl.flock` plus a durable terminal attempt record gives at-most-once behavior across processes. The attempt is consumed before model work. A crash or model failure can therefore lose a handoff, intentionally avoiding duplicate model calls. On platforms without `fcntl` (including Windows), the plugin registers no hooks or auxiliary task and does not access plugin state, SessionDB, or a model; this is a safe no-op, not full Windows support.
 
 ## Privacy and cleanup
 

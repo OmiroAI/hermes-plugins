@@ -6,14 +6,15 @@ messages and this module deliberately registers no gateway-dispatch hook.
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import ipaddress
 import importlib.metadata as importlib_metadata
+import json
 import math
 import os
 import re
 import stat
+import tempfile
 import threading
 import time
 import unicodedata
@@ -22,6 +23,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # Windows has no fcntl; this POSIX-locking plugin disables itself.
+    _fcntl = None
 
 DEFAULT_CONFIG = {
     "enabled": True,
@@ -203,6 +209,80 @@ def _sanitize_record(value: Any) -> dict[str, float | bool]:
     return record
 
 
+def _legacy_state_path(state: Any) -> Path | None:
+    """Return only this plugin's concrete state path, never an arbitrary caller path."""
+    path, data_dir = getattr(state, "path", None), getattr(state, "data_dir", None)
+    if not isinstance(path, (str, Path)) or not isinstance(data_dir, (str, Path)):
+        return None
+    try:
+        candidate, root = Path(path), Path(data_dir)
+        return candidate if candidate.parent.resolve() == root.resolve() else None
+    except OSError:
+        return None
+
+
+def _legacy_state_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Remove only known pre-v2 private records and content fields."""
+    cleaned = dict(data)
+    for key in tuple(cleaned):
+        if isinstance(key, str) and key.startswith(("pending:", "handoff:")):
+            del cleaned[key]
+    index = cleaned.get(STATE_INDEX_KEY)
+    if (
+        isinstance(index, Mapping)
+        and index.get("schema_version") == _STATE_VERSION
+        and isinstance(index.get("records"), Mapping)
+        and all(_record_key(key) is not None and isinstance(value, Mapping) for key, value in index["records"].items())
+    ):
+        cleaned[STATE_INDEX_KEY] = {
+            "schema_version": _STATE_VERSION,
+            "records": {
+                key: _sanitize_record(value) for key, value in index["records"].items()
+            },
+        }
+    return cleaned
+
+
+def _migrate_legacy_state(state: Any) -> bool:
+    """Atomically erase known legacy private state under PluginState's lock file."""
+    if _fcntl is None:
+        return False
+    path = _legacy_state_path(state)
+    if path is None:
+        return True
+    try:
+        if not path.exists():
+            return True
+        lock_path = path.with_name(f".{path.name}.lock")
+        with lock_path.open("a+b") as lock:
+            try:
+                _fcntl.flock(lock.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except OSError:
+                return False
+            try:
+                with path.open(encoding="utf-8-sig") as source:
+                    data = json.load(source)
+                if not isinstance(data, dict):
+                    return False
+                cleaned = _legacy_state_data(data)
+                if cleaned == data:
+                    return True
+                with tempfile.NamedTemporaryFile(
+                    mode="wb", dir=path.parent, prefix=f".{path.name}.", delete=False
+                ) as temporary:
+                    temporary.write(json.dumps(cleaned, ensure_ascii=False, indent=2).encode("utf-8"))
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+                    temporary_path = Path(temporary.name)
+                os.chmod(temporary_path, 0o600)
+                os.replace(temporary_path, path)
+                return True
+            finally:
+                _fcntl.flock(lock.fileno(), _fcntl.LOCK_UN)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def _read_index(state: Any) -> dict[str, Any] | None:
     try:
         raw = state.get(STATE_INDEX_KEY, None)
@@ -304,19 +384,22 @@ def _prune_lock_files(
                 continue
             with path.open("a+b") as handle:
                 try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
                 except BlockingIOError:
                     continue
                 try:
                     os.unlink(path)
                 finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
     except (KeyError, OSError, TypeError, ValueError):
         return
 
 
 @contextmanager
 def _predecessor_lock(state: Any, predecessor_id: str) -> Iterator[bool]:
+    if _fcntl is None:
+        yield False
+        return
     path = _lock_path(state, predecessor_id)
     if path is None:
         yield False
@@ -325,14 +408,14 @@ def _predecessor_lock(state: Any, predecessor_id: str) -> Iterator[bool]:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with path.open("a+b") as handle:
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
             except OSError:
                 yield False
                 return
             try:
                 yield True
             finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
     except OSError:
         yield False
 
@@ -352,7 +435,7 @@ def _runtime_is_compatible() -> bool:
 
 def on_session_finalize(ctx: Any, **kwargs: Any) -> None:
     """Persist only fast expiry/manual markers; never runs model or DB work."""
-    if not _runtime_is_compatible():
+    if _fcntl is None or not _runtime_is_compatible():
         return None
     sid = _valid_id(kwargs.get("session_id"))
     reason = kwargs.get("reason")
@@ -365,6 +448,8 @@ def on_session_finalize(ctx: Any, **kwargs: Any) -> None:
     settings = _settings(ctx)
     try:
         with _RECORD_LOCK:
+            if not _migrate_legacy_state(ctx.state):
+                return None
             index = _read_index(ctx.state)
             if index is None:
                 return None
@@ -386,13 +471,15 @@ def on_session_finalize(ctx: Any, **kwargs: Any) -> None:
 
 def create_pending_marker(state: Any, predecessor_session_id: str) -> bool:
     """Compatibility helper for tests; creates an expiry marker in the compact index."""
-    if not _runtime_is_compatible():
+    if _fcntl is None or not _runtime_is_compatible():
         return False
     sid = _valid_id(predecessor_session_id)
     if not sid:
         return False
     try:
         with _RECORD_LOCK:
+            if not _migrate_legacy_state(state):
+                return False
             index = _read_index(state)
             if index is None:
                 return False
@@ -409,9 +496,11 @@ def create_pending_marker(state: Any, predecessor_session_id: str) -> bool:
 def read_pending_marker(
     state: Any, predecessor_session_id: str
 ) -> dict[str, Any] | None:
-    if not _runtime_is_compatible():
+    if _fcntl is None or not _runtime_is_compatible():
         return None
     try:
+        if not _migrate_legacy_state(state):
+            return None
         index = _read_index(state)
         sid = _valid_id(predecessor_session_id)
         return (
@@ -608,10 +697,12 @@ def on_pre_llm_call(
         or not isinstance(user_message, (str, list))
     ):
         return None
-    if not _runtime_is_compatible():
+    if _fcntl is None or not _runtime_is_compatible():
         return None
     settings = _settings(ctx)
     if settings["enabled"] is not True:
+        return None
+    if not _migrate_legacy_state(ctx.state):
         return None
     db = None
     try:
@@ -688,6 +779,9 @@ def on_pre_llm_call(
 
 
 def register(ctx: Any) -> None:
+    """Register POSIX handoff hooks; Windows intentionally registers no handoff behavior."""
+    if _fcntl is None:
+        return None
     ctx.register_hook(
         "on_session_finalize", lambda **kwargs: on_session_finalize(ctx, **kwargs)
     )
