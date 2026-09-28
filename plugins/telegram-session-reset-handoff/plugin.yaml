@@ -1,0 +1,30 @@
+name: telegram-session-reset-handoff
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+license: MIT
+description: Prepare concise handoffs when Telegram conversations reset.
+provides_hooks:
+  - pre_gateway_dispatch
+  - on_session_finalize
+config_schema:
+  enabled:
+    type: bool
+    default: true
+    description: Enable Telegram reset handoff processing.
+  max_transcript_chars:
+    type: int
+    default: 24000
+    description: Maximum source transcript characters considered for a handoff.
+  max_handoff_chars:
+    type: int
+    default: 4500
+    description: Maximum generated handoff characters retained per record.
+  retention_days:
+    type: int
+    default: 30
+    description: Number of days to retain generated handoff records.
+  max_records:
+    type: int
+    default: 200
+    description: Maximum handoff records retained for the active profile.
