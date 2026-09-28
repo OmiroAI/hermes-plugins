@@ -24,7 +24,7 @@ config_schema:
     default: 4500
     minimum: 250
     maximum: 4500
-    description: Maximum generated handoff context retained per terminal record.
+    description: Maximum generated handoff context returned live to the first LLM turn.
   retention_days:
     type: int
     default: 30

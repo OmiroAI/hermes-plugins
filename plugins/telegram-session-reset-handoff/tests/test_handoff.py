@@ -12,6 +12,11 @@ PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_DIR))
 import telegram_session_reset_handoff as h
 
+
+@pytest.fixture(autouse=True)
+def tested_runtime(monkeypatch):
+    monkeypatch.setattr(h.importlib_metadata, "version", lambda _: "0.21.0")
+
 VALID = {
     "objective": "summary",
     "status": "status",
@@ -110,11 +115,17 @@ def test_raw_transcript_copy_is_rejected_and_never_persisted(monkeypatch, tmp_pa
 @pytest.mark.parametrize(
     ("field", "sensitive"),
     (
-        ("next_action_owner", "+1-202-555-0188"),
+        ("next_action_owner", "+1 202 555 0188"),
+        ("next_action_owner", "2025550188"),
+        ("next_action_owner", "+44 (0)20 7946 0958"),
         ("status", "owner@example.test"),
         ("source_note", "chat_id: -1001234567890"),
-        ("source_note", '"thread_id": "987654321"'),
-        ("blocker_or_decision", "api_key=sk-abcdefghijklmnopqrstuvwxyz012345"),
+        ("source_note", 'metadata={"route": {"chat_id": -1001234567890}}'),
+        ("source_note", "continue Telegram chat 1001234567890"),
+        ("source_note", "topic 987654321"),
+        ("source_note", "thread_id=987654321"),
+        ("blocker_or_decision", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"),
+        ("blocker_or_decision", "token: abcdefghijklmnop"),
         ("deadline_or_review", "connect to 192.0.2.25"),
         ("last_verified_action", "peer is 2001:db8::1"),
     ),
@@ -169,7 +180,9 @@ def test_normal_owner_and_action_summary_is_accepted(monkeypatch, tmp_path):
 
     assert result and "Aileen to approve the rollout plan." in result["context"]
     record = ctx.state.values[h.STATE_INDEX_KEY]["records"][h._digest("old")]
-    assert record["handoff"] == accepted and record["rendered"] == result["context"]
+    assert record["attempted"] is True and record["consumed"] is True
+    assert "handoff" not in record and "rendered" not in record
+    assert "Aileen to approve the rollout plan." not in repr(ctx.state.values)
 
 
 def test_unprefixed_long_raw_content_is_rejected_across_handoff_fields(monkeypatch, tmp_path):
@@ -222,6 +235,62 @@ def test_unprefixed_long_raw_content_is_rejected_within_one_handoff_field(
     ) is None
     record = ctx.state.values[h.STATE_INDEX_KEY]["records"][h._digest("old")]
     assert "handoff" not in record and raw not in repr(ctx.state.values)
+
+
+@pytest.mark.parametrize(
+    "raw, copied",
+    (
+        (
+            "Keep   the\tproduction\nrelease   blocked until review.",
+            "keep the production release blocked until review.",
+        ),
+        (
+            "Do not ship the customer migration before backup verification.",
+            "Do\u200b not ship  the customer\tmigration\nbefore backup verification.",
+        ),
+    ),
+)
+def test_canonical_raw_copy_is_rejected_across_fields(monkeypatch, tmp_path, raw, copied):
+    db = DB()
+    db.get_messages_as_conversation = lambda _: [{"role": "assistant", "content": raw}]
+    monkeypatch.setattr(h, "open_session_db", lambda: db)
+    split = len(copied) // 2
+    ctx = SimpleNamespace(
+        state=State(tmp_path),
+        llm=Llm(dict(VALID, objective=copied[:split], status=copied[split:])),
+        get_config=lambda k, d=None: d,
+    )
+    assert h.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="real current input",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    ) is None
+    record = ctx.state.values[h.STATE_INDEX_KEY]["records"][h._digest("old")]
+    assert record["attempted"] is True and "handoff" not in record
+
+
+def test_role_prefixed_canonical_raw_copy_is_rejected(monkeypatch, tmp_path):
+    db = DB()
+    db.get_messages_as_conversation = lambda _: [
+        {"role": "user", "content": "Never  promote\tthe\nprivate route identifier."}
+    ]
+    monkeypatch.setattr(h, "open_session_db", lambda: db)
+    ctx = SimpleNamespace(
+        state=State(tmp_path),
+        llm=Llm(dict(VALID, objective="USER: never promote the private route identifier.")),
+        get_config=lambda k, d=None: d,
+    )
+    assert h.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="real current input",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    ) is None
 
 
 def test_transcript_loads_only_user_assistant_and_caps_newest_suffix():

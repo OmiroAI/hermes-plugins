@@ -8,9 +8,16 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_DIR))
 import telegram_session_reset_handoff as handoff
+
+
+@pytest.fixture(autouse=True)
+def tested_runtime(monkeypatch):
+    monkeypatch.setattr(handoff.importlib_metadata, "version", lambda _: "0.21.0")
 
 VALID = {
     "objective": "Continue the implementation.",
@@ -332,3 +339,67 @@ def test_index_write_prunes_only_old_unused_lock_files(tmp_path):
         assert handoff._write_index(state, index, settings)
         assert not old_unused.exists()
         assert recent_unused.exists() and active_unused.exists() and retained_lock.exists()
+
+
+@pytest.mark.parametrize(
+    ("installed_version", "expected_calls"),
+    (("0.21.0", 1), ("0.21.1", 0)),
+)
+def test_runtime_version_gate_runs_before_database_or_model_work(
+    monkeypatch, tmp_path, installed_version, expected_calls
+):
+    ctx, _ = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(handoff.importlib_metadata, "version", lambda _: installed_version)
+    if expected_calls == 0:
+        monkeypatch.setattr(
+            handoff,
+            "open_session_db",
+            lambda: (_ for _ in ()).throw(AssertionError("version gate must precede DB")),
+        )
+    assert bool(
+        handoff.on_pre_llm_call(
+            ctx,
+            session_id="new",
+            user_message="x",
+            conversation_history=[],
+            is_first_turn=True,
+            platform="telegram",
+        )
+    ) is (installed_version == "0.21.0")
+    assert len(ctx.llm.calls) == expected_calls
+    if expected_calls == 0:
+        assert ctx.state.values == {}
+
+
+def test_unavailable_runtime_version_fails_open_before_database_or_model_work(
+    monkeypatch, tmp_path
+):
+    ctx, _ = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        handoff.importlib_metadata,
+        "version",
+        lambda _: (_ for _ in ()).throw(handoff.importlib_metadata.PackageNotFoundError),
+    )
+    monkeypatch.setattr(
+        handoff,
+        "open_session_db",
+        lambda: (_ for _ in ()).throw(AssertionError("version gate must precede DB")),
+    )
+    assert handoff.on_pre_llm_call(
+        ctx,
+        session_id="new",
+        user_message="x",
+        conversation_history=[],
+        is_first_turn=True,
+        platform="telegram",
+    ) is None
+    assert not ctx.llm.calls and ctx.state.values == {}
+
+
+def test_finalize_version_gate_precedes_state_work(monkeypatch, tmp_path):
+    ctx = Ctx(tmp_path)
+    monkeypatch.setattr(handoff.importlib_metadata, "version", lambda _: "0.21.1")
+    handoff.on_session_finalize(
+        ctx, platform="telegram", reason="session_expired", session_id="old"
+    )
+    assert ctx.state.values == {}

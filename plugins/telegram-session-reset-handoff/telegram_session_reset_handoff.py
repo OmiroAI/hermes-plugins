@@ -9,12 +9,14 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import ipaddress
+import importlib.metadata as importlib_metadata
 import math
 import os
 import re
 import stat
 import threading
 import time
+import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -35,6 +37,7 @@ MIN_RECORDS, MAX_RECORDS = 1, 200
 RAW_CONTENT_COPY_MIN_CHARS = 24
 STATE_INDEX_KEY = "handoff-state-v2"
 _STATE_VERSION = 2
+_REQUIRED_HERMES_VERSION = "0.21.0"
 _RECORD_LOCK = threading.RLock()
 _FIELDS = (
     "objective",
@@ -47,19 +50,24 @@ _FIELDS = (
 )
 _FIELD_SET = frozenset(_FIELDS)
 _EMAIL_RE = re.compile(r"(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![\w.-])", re.I)
-_PHONE_RE = re.compile(
-    r"(?<!\w)(?:\+\d{1,3}[ .-]?)?(?:\(\d{2,4}\)|\d{2,4})[ .-]\d{3,4}[ .-]\d{4}(?!\w)"
-)
+_PHONE_RE = re.compile(r"(?<![\w+])(?:\+?\d[\s().-]*){10,15}(?![\w-])")
 _CREDENTIAL_RE = re.compile(
     r"(?i)(?:api[_-]?key|access[_-]?token|auth(?:orization)?|bearer|secret|password|passwd|token)"
     r"\s*[:=]\s*['\"]?[A-Z0-9_./+=-]{8,}"
 )
 _CREDENTIAL_PREFIX_RE = re.compile(r"(?<![\w-])(?:sk|ghp|github_pat|xox[baprs])-[A-Z0-9_-]{8,}", re.I)
+_JWT_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}(?![A-Za-z0-9_-])"
+)
+_BEARER_RE = re.compile(r"(?i)(?<![\w-])bearer\s+[A-Z0-9._~+/-]{8,}")
 _IP_CANDIDATE_RE = re.compile(
     r"(?<![0-9A-Za-z_.:-])(?:\[[0-9A-Fa-f:.]+\]|(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:]+)(?![0-9A-Za-z_.:-])"
 )
 _TELEGRAM_ROUTE_RE = re.compile(
-    r"(?i)(?:telegram[_ -]?)?(?:chat|topic|thread|session)[_ -]?id\s*['\"]?\s*[:=]\s*['\"]?-?\d{4,}\b"
+    r"(?i)(?:telegram[_ -]?)?(?:chat|topic|thread|session)(?:[_ -]?id)?\s*['\"]?\s*[:=]\s*['\"]?-?\d{4,}\b"
+)
+_TELEGRAM_ROUTE_NATURAL_RE = re.compile(
+    r"(?i)\b(?:telegram\s+)?(?:chat|topic|thread|session)(?:\s+id)?\s+-?\d{4,}\b"
 )
 _LABELS = {
     "objective": "Objective",
@@ -297,8 +305,18 @@ def _marker(index: Mapping[str, Any], sid: str, kind: str) -> bool:
     return record.get(kind) is True
 
 
+def _runtime_is_compatible() -> bool:
+    """Fail open unless the installed Hermes distribution is the tested version."""
+    try:
+        return importlib_metadata.version("hermes-agent") == _REQUIRED_HERMES_VERSION
+    except Exception:
+        return False
+
+
 def on_session_finalize(ctx: Any, **kwargs: Any) -> None:
     """Persist only fast expiry/manual markers; never runs model or DB work."""
+    if not _runtime_is_compatible():
+        return None
     sid = _valid_id(kwargs.get("session_id"))
     reason = kwargs.get("reason")
     if (
@@ -331,6 +349,8 @@ def on_session_finalize(ctx: Any, **kwargs: Any) -> None:
 
 def create_pending_marker(state: Any, predecessor_session_id: str) -> bool:
     """Compatibility helper for tests; creates an expiry marker in the compact index."""
+    if not _runtime_is_compatible():
+        return False
     sid = _valid_id(predecessor_session_id)
     if not sid:
         return False
@@ -352,6 +372,8 @@ def create_pending_marker(state: Any, predecessor_session_id: str) -> bool:
 def read_pending_marker(
     state: Any, predecessor_session_id: str
 ) -> dict[str, Any] | None:
+    if not _runtime_is_compatible():
+        return None
     try:
         index = _read_index(state)
         sid = _valid_id(predecessor_session_id)
@@ -447,12 +469,24 @@ def _validated_handoff(value: Any) -> dict[str, str | None] | None:
     return result if 0 < total <= 16000 else None
 
 
+def _canonicalize(value: str) -> str:
+    """Make ordinary layout and Unicode format-character changes non-evasive."""
+    normalized = unicodedata.normalize("NFKC", value)
+    without_format_characters = "".join(
+        char for char in normalized if unicodedata.category(char) != "Cf"
+    )
+    return " ".join(without_format_characters.split()).casefold()
+
+
 def _raw_copy(handoff: Mapping[str, str | None], transcript: TranscriptSource) -> bool:
-    # Role-prefixed entries are always prohibited.  The 24-character raw-content
-    # threshold prevents common short phrases from becoming false positives.
-    joined = "".join(handoff[field] or "" for field in _FIELDS)
-    return any(entry in joined for entry in transcript.entries) or any(
-        content in joined
+    """Reject canonical verbatim copies, including copies split between fields.
+
+    This detects raw copying only; it does not claim to detect semantic
+    similarity or paraphrases.
+    """
+    joined = _canonicalize("".join(handoff[field] or "" for field in _FIELDS))
+    return any(_canonicalize(entry) in joined for entry in transcript.entries) or any(
+        _canonicalize(content) in joined
         for content in transcript.contents
         if len(content) >= RAW_CONTENT_COPY_MIN_CHARS
     )
@@ -468,7 +502,10 @@ def _contains_sensitive_identifier(handoff: Mapping[str, str | None]) -> bool:
             or _PHONE_RE.search(text)
             or _CREDENTIAL_RE.search(text)
             or _CREDENTIAL_PREFIX_RE.search(text)
+            or _JWT_RE.search(text)
+            or _BEARER_RE.search(text)
             or _TELEGRAM_ROUTE_RE.search(text)
+            or _TELEGRAM_ROUTE_NATURAL_RE.search(text)
         ):
             return True
         for candidate in _IP_CANDIDATE_RE.findall(text):
@@ -522,6 +559,8 @@ def on_pre_llm_call(
         or not _valid_id(session_id)
         or not isinstance(user_message, (str, list))
     ):
+        return None
+    if not _runtime_is_compatible():
         return None
     settings = _settings(ctx)
     if settings["enabled"] is not True:
@@ -588,11 +627,7 @@ def on_pre_llm_call(
             rendered_result = _render(handoff, int(settings["max_handoff_chars"]))
             if rendered_result is None:
                 return None
-            compact, rendered = rendered_result
-            rec.update({"handoff": compact, "rendered": rendered})
-            index["records"][_digest(predecessor)] = rec
-            if not _write_index(ctx.state, index, settings):
-                return None
+            _, rendered = rendered_result
             return {"context": rendered}
     except Exception:
         return None

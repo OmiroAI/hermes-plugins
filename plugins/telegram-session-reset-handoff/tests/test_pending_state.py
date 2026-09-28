@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_DIR))
 from telegram_session_reset_handoff import (
@@ -12,6 +14,12 @@ from telegram_session_reset_handoff import (
     on_session_finalize,
     read_pending_marker,
 )
+import telegram_session_reset_handoff as handoff
+
+
+@pytest.fixture(autouse=True)
+def tested_runtime(monkeypatch):
+    monkeypatch.setattr(handoff.importlib_metadata, "version", lambda _: "0.21.0")
 
 
 class State:
