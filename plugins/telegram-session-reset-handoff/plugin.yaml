@@ -1,6 +1,8 @@
 name: telegram-session-reset-handoff
-version: 0.2.0
-manifest_version: 2
+version: 0.2.1
+# Kept at v1 because Hermes 0.21.0's installer accepts v1 manifests only.
+# The loader still reads the additive metadata below.
+manifest_version: 1
 api_version: 1
 license: MIT
 description: Worker-side continuity handoffs for automatic Telegram session expiry resets.
