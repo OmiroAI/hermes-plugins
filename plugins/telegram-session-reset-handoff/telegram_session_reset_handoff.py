@@ -70,7 +70,7 @@ def register(ctx: Any) -> None:
     ctx.register_hook("pre_gateway_dispatch", on_pre_gateway_dispatch)
     ctx.register_hook("on_session_finalize", on_session_finalize)
     ctx.register_auxiliary_task(
-        "session-handoff",
+        "telegram_session_reset_handoff",
         display_name="Session Handoff",
         description="Create a concise handoff for a reset Telegram session.",
     )

@@ -72,7 +72,7 @@ def test_profile_storage_path_is_injected_and_never_hardcodes_a_home() -> None:
     )
 
 
-def test_registers_gateway_dispatch_finalize_and_handoff_auxiliary_task() -> None:
+def test_registers_gateway_dispatch_finalize_and_namespaced_auxiliary_task() -> None:
     class Context:
         def __init__(self) -> None:
             self.hooks: list[tuple[str, object]] = []
@@ -93,7 +93,7 @@ def test_registers_gateway_dispatch_finalize_and_handoff_auxiliary_task() -> Non
     ]
     assert ctx.auxiliary_tasks == [
         (
-            "session-handoff",
+            "telegram_session_reset_handoff",
             {
                 "display_name": "Session Handoff",
                 "description": "Create a concise handoff for a reset Telegram session.",
