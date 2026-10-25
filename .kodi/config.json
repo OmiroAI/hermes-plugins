@@ -1,0 +1,7 @@
+{
+  "profile": "hermes",
+  "reviewers": [
+    "kubja"
+  ],
+  "qa_scope": "offline baseline; hardware and production deployment are excluded"
+}
