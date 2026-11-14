@@ -1,0 +1,8 @@
+name: scoped-collaborator-drive
+version: 0.1.0
+manifest_version: 1
+api_version: 1
+license: MIT
+description: Opt-in external gateway admission and scoped Google Drive collaboration.
+# Requires the companion gateway/admission_policy.py core change; see README.
+requires_hermes: ">=0.23.1,<0.24"

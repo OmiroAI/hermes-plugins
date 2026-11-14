@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "activation": "paused",
+  "founders": {
+    "founder-example": {
+      "identities": [{"platform": "telegram", "user_id": "REPLACE_WITH_VERIFIED_STABLE_ID"}],
+      "verification_source": "REPLACE_WITH_OUT_OF_BAND_VERIFICATION_RECORD"
+    }
+  },
+  "trusted_chats": [],
+  "collaborators": [{
+    "platform": "telegram",
+    "platform_user_id": "REPLACE_WITH_VERIFIED_COLLABORATOR_ID",
+    "google_email": "collaborator@example.invalid",
+    "venture": "example-venture",
+    "approved_drive_folder_ids": ["REPLACE_WITH_VERIFIED_PROJECT_FOLDER_ID"],
+    "resource_scope": "venture_current_access",
+    "allowed_actions": ["footage_review", "transcription", "paper_edit", "draft"],
+    "exclusions": ["deletion", "sharing_changes", "publishing", "external_sends", "unrelated_private_sources"],
+    "approving_founder": "founder-example",
+    "approval_source": "REPLACE_WITH_FOUNDER_APPROVAL_RECORD",
+    "status": "revoked",
+    "task_approvals": []
+  }]
+}
