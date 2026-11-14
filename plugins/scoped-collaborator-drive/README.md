@@ -191,11 +191,15 @@ entrypoint. From this repository's root:
 
 ```sh
 docker build -f plugins/scoped-collaborator-drive/Dockerfile \
-  --build-arg HERMES_BASE=sha256:YOUR_REVIEWED_CORE_IMAGE_ID \
+  --build-arg HERMES_BASE=your-registry/hermes@sha256:YOUR_REVIEWED_CORE_DIGEST \
   -t collaborator-drive:YOUR_PLUGIN_COMMIT .
 ```
 
-The base image must already contain the required admission change. This layer
+The base image must already contain the required admission change. For a local
+build with the same Docker daemon/builder, a freshly built `hermi-core:CORE_COMMIT`
+tag may be used instead; record/verify its actual image ID and do not pull or
+replace it between the two builds. Remote builders need access to the pinned
+base image in their own image store or registry. This layer
 installs compatible bounded dependencies, not a hash-locked transitive dependency
 set; retain build provenance and review resolved dependencies for production. Pin
 both source commits and the resulting immutable image ID. Keep the root base user

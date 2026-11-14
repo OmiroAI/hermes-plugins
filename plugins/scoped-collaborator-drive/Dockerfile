@@ -1,5 +1,5 @@
 # Build the reviewed Hermes fork separately using its own Dockerfile.
-# Pass its immutable local image ID or registry digest, not a floating release tag.
+# Pass a reviewed registry digest or freshly built local tag; record its image ID.
 ARG HERMES_BASE
 FROM ${HERMES_BASE}
 USER root
