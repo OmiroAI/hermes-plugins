@@ -208,3 +208,26 @@ set; retain build provenance and review resolved dependencies for production. Pi
 both source commits and the resulting immutable image ID. Keep the root base user
 and inherited entrypoint; Hermes CLI runs as its existing unprivileged user.
 No Compose deployment, registry activation or credential migration is automatic.
+
+### Founders in external chats and safe failures
+
+Verified founder identity enables privileged passthrough only in verified private
+or explicitly trusted internal chats. It does not implicitly create a scoped
+venture grant in external groups. Record a separate ordinary grant with the
+founder's independently verified Google email, venture project roots and permitted
+actions. An optional `approved_chats` list binds that grant to exact platform/chat
+pairs, for example `[{"platform":"telegram","chat_id":"CONTENT_CHAT_ID"}]`.
+Leave the external chat out of `trusted_chats`. Missing grants never inherit another
+collaborator's or the service account's Google permissions. Verify the chosen
+account's actual access; a valid registry grant cannot manufacture Drive access.
+
+The command distinguishes missing grants, ambiguous ventures, scope/ACL denials,
+unavailable permission evidence, execution failure and incomplete attempted writes.
+Only the mutation API invocation boundary marks a write as attempted. A reserved
+or prior mutation record is not reported as proof of a new write, and it blocks
+automatic replay. Error replies use fixed safe text, never raw API/model exception
+messages or source names. Read-only group work returns generic verified status;
+private source text stays withheld. The core's unavailable-command fallback is
+neutral because it cannot establish whether a remote mutation happened; inspect
+request status/records before retrying. These records do not make API operations
+atomic, and cannot establish remote completion after a process crash.
