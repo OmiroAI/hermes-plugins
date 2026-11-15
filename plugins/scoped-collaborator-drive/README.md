@@ -27,7 +27,10 @@ install -d -m 0700 /var/lib/collaborator-drive
 These are example operator paths; choose paths appropriate to your installation.
 The worker needs Google Application Default Credentials with Drive and Documents
 scopes (`google.auth.default`), and `OPENAI_API_KEY` for an OpenAI-compatible model.
-An optional `base_url` in worker.json selects another compatible endpoint. Provision
+An optional `base_url` in worker.json selects another compatible endpoint. Set
+`api_mode: responses` in worker.json for the bounded streaming Responses API
+transport. Credentials and provider headers are injected by the operator adapter;
+this does not enable a provider app-server or its tools. Provision
 credentials outside chat and the public source tree. Drive Activity API/scope is
 **not required** for the standing project/current-access rule. Google APIs and the
 model provider receive the data needed for the requested work; obtain the owner's

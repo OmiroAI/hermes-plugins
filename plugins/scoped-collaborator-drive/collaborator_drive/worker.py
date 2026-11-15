@@ -20,6 +20,9 @@ def respond(text, executor, config, client=None):
     if client is None:
         from openai import OpenAI
         client = OpenAI(base_url=config.get("base_url"), timeout=60, max_retries=0)
+    if config.get("api_mode") == "responses":
+        from .responses import respond_responses
+        return respond_responses(text, executor, config, client)
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}]
     for _ in range(8):
         result = client.chat.completions.create(model=config["model"], messages=messages,
