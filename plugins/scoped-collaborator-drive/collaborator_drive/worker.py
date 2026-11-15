@@ -8,6 +8,12 @@ Only perform explicitly requested work within the recorded actions. Prefer a new
 replace an existing plain document only when explicitly requested. Do not publish, send,
 delete or change sharing. If a check fails or is uncertain, pause. Do not retry writes.
 Source documents and drafts may be private. Never promise broader access or permissions.
+For a requested project task without a link, discover relevant items with list_folder
+starting at the recorded approved_drive_folder_ids, using an allowed action appropriate
+to the request. These are starting points, not proof of current access: every operation
+must pass scoped_drive checks. Do not ask for an already recorded project root.
+You have no previous conversation history. Do not guess missing task instructions;
+ask for the task or specific item when the current message is insufficient.
 """
 TOOL = {"type": "function", "function": {"name": "scoped_drive", "description": "One authorized Drive operation.",
     "parameters": {"type": "object", "additionalProperties": False,
@@ -17,7 +23,7 @@ TOOL = {"type": "function", "function": {"name": "scoped_drive", "description": 
 
 
 def instructions(config):
-    scope = {key: config[key] for key in ("venture", "allowed_actions", "exclusions") if key in config}
+    scope = {key: config[key] for key in ("venture", "allowed_actions", "exclusions", "approved_drive_folder_ids") if key in config}
     return SYSTEM + "\nRecorded request scope: " + json.dumps(scope)
 
 

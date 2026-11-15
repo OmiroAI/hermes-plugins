@@ -72,3 +72,35 @@ def test_noops_do_not_claim_completion_in_group(registry, source, drive, tmp_pat
     tmp_path.chmod(0o700);source['chat_type']='group'
     result=gate.dispatch(frame(source),lambda:registry,{},tmp_path,lambda:drive,lambda *args:'done')
     assert result['reply'].startswith('No verified Drive result')
+
+
+@pytest.mark.parametrize('has_access', [True, False])
+def test_linkless_request_gets_only_selected_roots_and_still_checks_acl(registry, source, drive, tmp_path, has_access):
+    from collaborator_drive.worker import instructions
+    tmp_path.chmod(0o700)
+    source['chat_type']='group'
+    other=copy.deepcopy(registry['collaborators'][0])
+    other.update(platform_user_id='another-person',venture='another-project',approved_drive_folder_ids=['unrelated-root'])
+    registry['collaborators'].append(other)
+    if not has_access:drive.acl=[]
+    listed=[]
+    def children(target):
+        listed.append(target)
+        return ['document_test_id']
+    drive.list_children=children
+    def worker(text, executor, config):
+        prompt=instructions(config)
+        assert config['approved_drive_folder_ids']==['project_root_test']
+        assert 'project_root_test' in prompt
+        assert 'unrelated-root' not in prompt and 'stale-root' not in prompt
+        assert 'collaborator@example.invalid' not in prompt
+        executor.execute({'operation':'list_folder','target':config['approved_drive_folder_ids'][0],
+                          'action':'footage_review','body':''})
+        return 'PRIVATE FILE NAMES MUST NOT APPEAR'
+    result=gate.dispatch(frame(source,'Find the project footage for review'),lambda:registry,
+        {'approved_drive_folder_ids':['stale-root']},tmp_path,lambda:drive,worker)
+    assert result['decision']=='deny' and 'PRIVATE FILE' not in result['reply']
+    if has_access:
+        assert listed==['project_root_test'] and 'read-only work completed' in result['reply']
+    else:
+        assert listed==[] and 'permission evidence could not be verified' in result['reply']

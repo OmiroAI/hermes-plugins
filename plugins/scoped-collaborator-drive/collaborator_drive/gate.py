@@ -55,7 +55,8 @@ def handle(frame, loader, config, state_dir, adapter_factory=GoogleDrive, worker
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         executor = Executor(loader, adapter_factory(), source, venture, state_dir, frame["message_id"], config)
         try:
-            request_config = dict(config, venture=venture, allowed_actions=entry["allowed_actions"], exclusions=entry["exclusions"])
+            request_config = dict(config, venture=venture, allowed_actions=entry["allowed_actions"], exclusions=entry["exclusions"],
+                                  approved_drive_folder_ids=entry["approved_drive_folder_ids"])
             result = worker(text, executor, request_config)
             executor.recheck()
             if source.get("chat_type") not in {"private", "dm"}:
