@@ -31,7 +31,7 @@ def test_real_core_command_and_missing_worker_fail_closed(registry, source, tmp_
     assert not asyncio.run(admission_policy.admit_gateway_event("callback", source)).allow
     unknown = dict(source, user_id="unknown-test")
     result = asyncio.run(admission_policy.admit_gateway_event("message", unknown))
-    assert not result.allow and "paused" in result.reply
+    assert not result.allow and "No active scoped grant" in result.reply
     # Inactive collaborator is denied before any Google/model credential lookup.
     registry["collaborators"][0]["status"] = "revoked"
     reg.write_text(json.dumps(registry))
