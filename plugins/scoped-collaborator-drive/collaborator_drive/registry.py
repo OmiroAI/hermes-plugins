@@ -12,8 +12,20 @@ class Denied(Exception):
     """An operation is outside the recorded grant."""
 
 
+class MissingGrant(Denied):
+    """No active grant applies to this immutable identity and chat."""
+
+
+class AmbiguousVenture(Denied):
+    """Several active ventures apply and none was explicitly selected."""
+
+
 class Uncertain(Exception):
     """Evidence is insufficient; pause without fallback."""
+
+
+class PermissionUncertain(Uncertain):
+    """Current resource/permission evidence cannot establish access."""
 
 
 def load(path):
@@ -61,6 +73,14 @@ def validate(registry):
             values = entry.get(field)
             if not isinstance(values, list) or not values or any(not isinstance(v, str) or not v for v in values):
                 raise Uncertain("Incomplete collaborator scope.")
+        if "approved_chats" in entry:
+            chats = entry["approved_chats"]
+            if not isinstance(chats, list) or not chats:
+                raise Uncertain("Chat-bound grants need explicit chat mappings.")
+            for chat in chats:
+                if not isinstance(chat, dict) or set(chat) != {"platform", "chat_id"} or any(
+                        not isinstance(chat[k], str) or not chat[k] for k in ("platform", "chat_id")):
+                    raise Uncertain("Invalid scoped chat mapping.")
         if entry.get("resource_scope") != "venture_current_access":
             raise Uncertain("Unsupported resource rule.")
 
@@ -73,11 +93,17 @@ def founder_context(registry, source):
     return known and (private or trusted)
 
 
+def chat_matches(entry, source):
+    return "approved_chats" not in entry or {
+        "platform": source.get("platform"), "chat_id": source.get("chat_id")
+    } in entry["approved_chats"]
+
+
 def grant_for(registry, source, venture):
     if registry.get("activation") != "active":
         raise Uncertain("Collaborator work is paused.")
     found = [e for e in registry["collaborators"] if e["platform"] == source.get("platform")
-             and e["platform_user_id"] == source.get("user_id") and e["venture"] == venture]
+             and e["platform_user_id"] == source.get("user_id") and e["venture"] == venture and chat_matches(e, source)]
     if len(found) != 1 or found[0]["status"] != "active":
-        raise Denied("No unique active grant.")
+        raise MissingGrant("No unique active scoped grant.")
     return found[0]

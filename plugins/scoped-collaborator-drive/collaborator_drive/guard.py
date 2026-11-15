@@ -1,7 +1,7 @@
 """Conservative intersection of venture roots and current exact-target user ACLs."""
 import re
 from datetime import datetime, timezone
-from .registry import Denied, Uncertain, grant_for
+from .registry import Denied, PermissionUncertain, grant_for
 
 READ = {"reader", "commenter", "writer", "owner"}
 EDIT = {"writer", "owner"}
@@ -14,23 +14,23 @@ def ancestry(adapter, target):
     chain, seen = [], set()
     for _ in range(32):
         if target in seen:
-            raise Uncertain("Ambiguous ancestry.")
+            raise PermissionUncertain("Ambiguous ancestry.")
         seen.add(target)
         item = adapter.metadata(target)
         if item.get("id") != target:
-            raise Uncertain("Metadata identity mismatch.")
+            raise PermissionUncertain("Metadata identity mismatch.")
         if item.get("trashed"):
             raise Denied("Trashed resource.")
         if item.get("driveId") or item.get("mimeType") == "application/vnd.google-apps.shortcut":
-            raise Uncertain("Shared drives and shortcuts need separate verification.")
+            raise PermissionUncertain("Shared drives and shortcuts need separate verification.")
         chain.append(item)
         parents = item.get("parents", [])
         if not parents:
             return chain
         if not isinstance(parents, list) or len(parents) != 1:
-            raise Uncertain("Ambiguous parent path.")
+            raise PermissionUncertain("Ambiguous parent path.")
         target = parents[0]
-    raise Uncertain("Ancestry limit exceeded.")
+    raise PermissionUncertain("Ancestry limit exceeded.")
 
 
 def user_roles(acl, email):
@@ -41,19 +41,19 @@ def user_roles(acl, email):
         if permission.get("deleted") or permission.get("view"):
             continue
         if permission.get("inheritedPermissionsDisabled") or permission.get("pendingOwner"):
-            raise Uncertain("Uncertain collaborator permission.")
+            raise PermissionUncertain("Uncertain collaborator permission.")
         expiry = permission.get("expirationTime")
         if expiry:
             try:
                 if datetime.fromisoformat(expiry.replace("Z", "+00:00")) <= datetime.now(timezone.utc):
                     continue
             except (ValueError, TypeError):
-                raise Uncertain("Unknown permission expiry.") from None
+                raise PermissionUncertain("Unknown permission expiry.") from None
         roles.add(permission.get("role"))
         direct |= permission.get("role") == "owner" or any(
             detail.get("inherited") is False for detail in permission.get("permissionDetails", []))
     if not roles:
-        raise Uncertain("Current exact-target user access cannot be established.")
+        raise PermissionUncertain("Current exact-target user access cannot be established.")
     return roles, direct
 
 
@@ -71,21 +71,21 @@ def authorize(registry, adapter, source, venture, action, target, operation):
     acl = adapter.permissions(target)
     roles, direct = user_roles(acl, entry["google_email"])
     if any(m.get("inheritedPermissionsDisabled") for m in chain) and not direct:
-        raise Uncertain("Limited-access ancestry needs direct permission evidence.")
+        raise PermissionUncertain("Limited-access ancestry needs direct permission evidence.")
     if not roles & (READ if operation == "read" else EDIT):
         raise Denied("Collaborator lacks the required role.")
     if operation != "read" and any(p.get("type") in {"group", "domain", "anyone"} or p.get("view") for p in acl):
-        raise Uncertain("Broad or published write audiences need separate approval.")
+        raise PermissionUncertain("Broad or published write audiences need separate approval.")
     item = chain[0]
     if operation == "create" and item.get("mimeType") != FOLDER:
         raise Denied("Draft destination must be a folder.")
     if item.get("clientEncryptionDetails", {}).get("encryptionState") not in (None, "unencrypted"):
-        raise Uncertain("Encrypted content.")
+        raise PermissionUncertain("Encrypted content.")
     if operation != "read" and any(r.get("readOnly") for r in item.get("contentRestrictions", [])):
         raise Denied("Content is read-only.")
     for restrictions in item.get("downloadRestrictions", {}).values():
         if not isinstance(restrictions, dict) or any(restrictions.values()):
-            raise Uncertain("Download restrictions need effective capability verification.")
+            raise PermissionUncertain("Download restrictions need effective capability verification.")
     if operation == "read" and item.get("copyRequiresWriterPermission") and not roles & EDIT:
         raise Denied("Copy/download restricted.")
     return item
