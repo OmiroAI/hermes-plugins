@@ -3,6 +3,7 @@ import pytest
 from collaborator_drive.executor import Executor
 from collaborator_drive.gate import handle
 from collaborator_drive.registry import Denied, Uncertain
+from collaborator_drive.outcomes import PriorMutation
 
 
 def arguments(operation="inspect", action="draft", target="document_test_id", body="draft body"):
@@ -24,7 +25,7 @@ def test_read_rechecks_revocation(registry, drive, source, tmp_path):
 def test_write_revision_readback_and_deduplication(registry, drive, source, tmp_path):
     run = executor(registry, drive, source, tmp_path)
     assert run.execute(arguments("replace_doc"))["status"] == "verified"
-    with pytest.raises(FileExistsError):
+    with pytest.raises(PriorMutation):
         run.execute(arguments("replace_doc", body="retry changed text"))
     assert drive.calls.count("write") == 1
 
@@ -114,7 +115,7 @@ def test_write_readback_failure_cannot_be_blindly_retried(registry, source, driv
     drive.insert = lambda *args: drive.calls.append("write")
     with pytest.raises(Uncertain):
         run.execute(arguments("replace_doc"))
-    with pytest.raises(FileExistsError):
+    with pytest.raises(PriorMutation):
         run.execute(arguments("replace_doc"))
     assert drive.calls == ["write"]
 

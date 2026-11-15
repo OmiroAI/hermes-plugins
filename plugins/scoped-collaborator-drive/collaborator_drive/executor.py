@@ -6,6 +6,7 @@ from pathlib import Path
 from .guard import DOC, FOLDER, authorize
 from .google import document_text, require_plain_document
 from .registry import Denied, Uncertain
+from .outcomes import PriorMutation
 
 OPERATIONS = {"inspect": "read", "read_text": "read", "list_folder": "read", "transcribe": "read", "create_draft": "create", "replace_doc": "edit"}
 
@@ -16,6 +17,8 @@ class Executor:
         self.state_dir, self.message_id = Path(state_dir), message_id
         self.sources, self.drafts = {}, []
         self.config = config or {}
+        self.write_attempted = False
+        self._mutation_record = None
 
     def check(self, target, action, operation):
         return authorize(self.loader(), self.adapter, self.source, self.venture, action, target, operation)
@@ -33,10 +36,21 @@ class Executor:
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         # One mutation per inbound message; an attempt is durable before the API call.
         # Never delete automatically: timeout may have committed an unknown result.
-        with (self.state_dir / ("write-" + key)).open("x") as marker:
-            marker.write("attempted\n")
+        self._mutation_record = self.state_dir / ("write-" + key)
+        try:
+            with self._mutation_record.open("x") as marker:
+                marker.write('{"state":"reserved"}\n')
+                marker.flush()
+                os.fsync(marker.fileno())
+        except FileExistsError:
+            raise PriorMutation("A prior mutation record exists; do not replay.") from None
+
+    def _start_write(self):
+        with self._mutation_record.open("w") as marker:
+            marker.write('{"state":"api_attempt"}\n')
             marker.flush()
             os.fsync(marker.fileno())
+        self.write_attempted = True
 
     def execute(self, arguments):
         if not isinstance(arguments, dict) or set(arguments) != {"operation", "target", "action", "body"}:
@@ -99,6 +113,7 @@ class Executor:
         else:
             self.check(target, action, "create")
             self._mark_write()
+            self._start_write()
             target = self.adapter.create(target)
             self.check(target, action, "edit")
             document = self.adapter.document(target)
@@ -107,6 +122,7 @@ class Executor:
             raise Uncertain("Document revision is missing; verify any created draft before retrying.")
         self.recheck()
         self.check(target, action, "edit")
+        self._start_write()
         self.adapter.insert(target, body, revision, max(end, 1))
         self.check(target, action, "read")
         if document_text(self.adapter.document(target)) != body + "\n":
