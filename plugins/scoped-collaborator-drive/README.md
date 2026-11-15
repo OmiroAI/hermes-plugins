@@ -212,14 +212,22 @@ No Compose deployment, registry activation or credential migration is automatic.
 ### Founders in external chats and safe failures
 
 Verified founder identity enables privileged passthrough only in verified private
-or explicitly trusted internal chats. It does not implicitly create a scoped
-venture grant in external groups. Record a separate ordinary grant with the
-founder's independently verified Google email, venture project roots and permitted
-actions. An optional `approved_chats` list binds that grant to exact platform/chat
-pairs, for example `[{"platform":"telegram","chat_id":"CONTENT_CHAT_ID"}]`.
-Leave the external chat out of `trusted_chats`. Missing grants never inherit another
-collaborator's or the service account's Google permissions. Verify the chosen
-account's actual access; a valid registry grant cannot manufacture Drive access.
+or explicitly trusted internal chats. External chats still use fresh scoped
+context. The operator may record an ordinary personal-ACL grant, or an explicit
+`scoped_founder_routes` entry referencing a verified founder. A founder-delegated
+service route authorizes Hermi's configured Drive principal within its recorded
+project roots/actions and exact `approved_chats`; it does not require the founder
+to have personal Google access. Its approving founder and approval source must be
+recorded. The live service capability (`canListChildren`/`canDownload`, `canEdit`,
+or `canAddChildren`) must be verified for each operation. Root boundaries,
+exclusions, write audience restrictions, rechecks and safe group output remain.
+
+This exception is not available to ordinary collaborators. Their Google email
+and current exact-target ACL checks stay mandatory, and stored/model-provided
+principal flags cannot promote a collaborator to a founder. Leave external
+content chats out of `trusted_chats`. An optional `approved_chats` list also binds
+ordinary grants to exact platform/chat pairs. No route grants unrelated Drive
+resources, founder history, private memory, sharing changes or publishing.
 
 The command distinguishes missing grants, ambiguous ventures, scope/ACL denials,
 unavailable permission evidence, execution failure and incomplete attempted writes.

@@ -33,9 +33,11 @@ in the registry; they do not widen project scope or the current ACL requirement.
 These instructions guide interpretation. They do not replace code checks or OS
 isolation. Unsupported workflows pause; do not move them to the privileged agent.
 
-A verified founder speaking in an external chat still needs a separate scoped
-venture grant with a verified Google account; founder identity alone does not
-create that grant. Bind a grant to approved chats when required. Never make an
+A verified founder speaking in an external chat needs a recorded scoped venture
+authorization. An explicit founder-delegated service route may use the agent's
+current Drive access within approved project roots/actions/chats without requiring
+the founder's personal Google permissions. This exception never applies to ordinary
+collaborators: their verified Google identity and current ACLs remain mandatory. Never make an
 external content group trusted merely to bypass missing scoped authorization.
 Missing grants and ambiguous ventures are routing failures, not evidence that a
 Drive write occurred. Distinguish access denial and execution failure from an
