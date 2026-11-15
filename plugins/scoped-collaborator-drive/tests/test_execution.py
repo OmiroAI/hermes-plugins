@@ -172,3 +172,17 @@ def test_worker_receives_recorded_scope_without_identity_details(registry, sourc
     assert seen[0]["venture"] == "test-project"
     assert seen[0]["allowed_actions"] == registry["collaborators"][0]["allowed_actions"]
     assert "google_email" not in seen[0] and "platform_user_id" not in seen[0]
+
+
+def test_transcription_uses_operator_media_budget(registry, source, drive, tmp_path):
+    drive.items['document_test_id']['mimeType']='video/mp4'
+    limits=[]
+    def download(target,path,limit):
+        limits.append(limit)
+        raise Uncertain('Synthetic stop before download')
+    drive.download_media=download
+    run=executor(registry,drive,source,tmp_path)
+    run.config={'max_media_bytes':2_000_000_000,'transcriber_command':['/synthetic/transcriber']}
+    with pytest.raises(Uncertain):
+        run.execute(arguments('transcribe',action='transcription'))
+    assert limits==[2_000_000_000] and drive.calls==[]

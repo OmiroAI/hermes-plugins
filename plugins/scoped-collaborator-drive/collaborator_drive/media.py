@@ -9,12 +9,14 @@ import time
 from .registry import Uncertain
 
 
-def transcribe(adapter, target, command, decoder="/usr/bin/ffmpeg"):
+def transcribe(adapter, target, command, decoder="/usr/bin/ffmpeg", max_media_bytes=200_000_000):
     if not isinstance(command, list) or not command or any(not isinstance(v, str) or not v for v in command):
         raise Uncertain("No operator-configured local transcriber.")
+    if type(max_media_bytes) is not int or max_media_bytes <= 0:
+        raise Uncertain("Media download budget must be a positive byte count.")
     with tempfile.TemporaryDirectory(prefix="collaborator-media-") as directory:
         media, audio = (Path(directory) / name for name in ("media", "audio.wav"))
-        adapter.download_media(target, media, 200_000_000)
+        adapter.download_media(target, media, max_media_bytes)
         env = {"PATH": os.defpath, "HOME": directory, "LANG": "C.UTF-8", "OMP_NUM_THREADS": "2"}
         if not isinstance(decoder, str) or not os.path.isabs(decoder):
             raise Uncertain("Decoder must be an operator-configured absolute path.")

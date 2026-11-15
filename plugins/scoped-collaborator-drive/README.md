@@ -142,8 +142,13 @@ using the agent's credential is **not collaborator impersonation** and cannot pr
 all contextual Google restrictions; check/use are separate non-atomic requests.
 
 This public adapter reads/edits plain Google Docs and lists up to 100 verified
-children. Optional local transcription downloads at most 200 MB and processes the
-first 15 minutes. Configure `transcriber_command` as an operator-owned argv list in
+children. Optional local transcription defaults to a 200 MB download budget and
+processes the first 15 minutes. Set the operator-owned `max_media_bytes` positive
+integer in worker.json to raise the per-file budget (for example, `2000000000`
+for 2 GB). This changes a processing budget, never the approved resource scope or
+current-access requirement. Files are temporary and handled individually; a larger
+budget does not add visual analysis, pagination or a background batch workflow.
+Configure `transcriber_command` as an operator-owned argv list in
 worker.json; it receives one local WAV path and must emit exactly `{"text":"..."}`
 on stdout within 600 seconds. Install and pin your local speech model separately;
 no model download or shell is provided. `ffmpeg_path` defaults to `/usr/bin/ffmpeg`

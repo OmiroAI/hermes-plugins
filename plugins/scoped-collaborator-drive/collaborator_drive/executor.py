@@ -111,7 +111,8 @@ class Executor:
             from .media import transcribe
             self.sources[target] = action
             result = transcribe(self.adapter, target, self.config.get("transcriber_command"),
-                                self.config.get("ffmpeg_path", "/usr/bin/ffmpeg"))
+                                self.config.get("ffmpeg_path", "/usr/bin/ffmpeg"),
+                                self.config.get("max_media_bytes", 200_000_000))
             self.recheck()
             return result
         if op == "read_text":
