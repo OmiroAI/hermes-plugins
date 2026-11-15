@@ -1,4 +1,5 @@
 """Fixed operations; immutable transport identity and venture stay outside model arguments."""
+
 import hashlib
 import json
 import os
@@ -8,7 +9,14 @@ from .google import document_text, require_plain_document
 from .registry import Denied, Uncertain
 from .outcomes import PriorMutation
 
-OPERATIONS = {"inspect": "read", "read_text": "read", "list_folder": "read", "transcribe": "read", "create_draft": "create", "replace_doc": "edit"}
+OPERATIONS = {
+    "inspect": "read",
+    "read_text": "read",
+    "list_folder": "read",
+    "transcribe": "read",
+    "create_draft": "create",
+    "replace_doc": "edit",
+}
 
 
 class Executor:
@@ -53,18 +61,33 @@ class Executor:
         self.write_attempted = True
 
     def execute(self, arguments):
-        if not isinstance(arguments, dict) or set(arguments) != {"operation", "target", "action", "body"}:
+        if not isinstance(arguments, dict) or set(arguments) != {
+            "operation",
+            "target",
+            "action",
+            "body",
+        }:
             raise Denied("Unknown operation arguments.")
-        op, target, action, body = (arguments[k] for k in ("operation", "target", "action", "body"))
+        op, target, action, body = (
+            arguments[k] for k in ("operation", "target", "action", "body")
+        )
         if op not in OPERATIONS or not isinstance(action, str):
             raise Denied("Unsupported operation.")
         if not isinstance(body, str) or len(body) > 120000:
             raise Denied("Invalid body.")
-        if op in {"create_draft", "replace_doc"} and action not in {"paper_edit", "draft"}:
+        if op in {"create_draft", "replace_doc"} and action not in {
+            "paper_edit",
+            "draft",
+        }:
             raise Denied("Document writes require paper_edit or draft approval.")
         if op == "transcribe" and action != "transcription":
             raise Denied("Transcription approval is required.")
         item = self.check(target, action, OPERATIONS[op])
+        if OPERATIONS[op] == "read":
+            return self._read(op, target, action, item)
+        return self._write(op, target, action, body, item)
+
+    def _read(self, op, target, action, item):
         if op == "inspect":
             self.sources[target] = action
             return {k: item[k] for k in ("id", "name", "mimeType")}
@@ -98,6 +121,9 @@ class Executor:
             self.sources[target] = action
             self.recheck()
             return {"text": text}
+        raise Denied("Unsupported read operation.")
+
+    def _write(self, op, target, action, body, item):
         if not body:
             raise Denied("Empty writes are not allowed.")
         self.recheck()

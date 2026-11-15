@@ -3,6 +3,7 @@
 Recorded approval is not proof of human identity. Only a verified founder's
 out-of-band operator may write this file; do not give the worker write access.
 """
+
 import json
 import os
 import stat
@@ -41,6 +42,41 @@ def load(path):
     return registry
 
 
+def _strings(record, fields):
+    if not all(isinstance(record.get(key), str) and record[key] for key in fields):
+        raise Uncertain("Incomplete identity or authorization record.")
+
+
+def _chats(chats):
+    if not isinstance(chats, list) or not chats:
+        raise Uncertain("An explicit chat list is required.")
+    for chat in chats:
+        if not isinstance(chat, dict) or set(chat) != {"platform", "chat_id"}:
+            raise Uncertain("Invalid scoped chat mapping.")
+        _strings(chat, ("platform", "chat_id"))
+
+
+def _scope(entry, founders):
+    _strings(entry, ("venture", "approving_founder", "approval_source"))
+    if entry["approving_founder"] not in founders or entry.get("status") not in {
+        "active",
+        "revoked",
+    }:
+        raise Uncertain("Invalid approving founder or status.")
+    if entry.get("resource_scope") != "venture_current_access":
+        raise Uncertain("Unsupported resource rule.")
+    for key in ("approved_drive_folder_ids", "allowed_actions", "exclusions"):
+        values = entry.get(key)
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(not isinstance(v, str) or not v for v in values)
+        ):
+            raise Uncertain("Incomplete venture scope.")
+    if "approved_chats" in entry:
+        _chats(entry["approved_chats"])
+
+
 def validate(registry):
     if not isinstance(registry, dict) or registry.get("version") != 1:
         raise Uncertain("Unknown registry schema.")
@@ -50,60 +86,30 @@ def validate(registry):
     if not isinstance(founders, dict) or not founders:
         raise Uncertain("Verified founder mapping is missing.")
     for founder in founders.values():
-        identities = founder.get("identities", [])
-        if not identities or not founder.get("verification_source"):
+        if not founder.get("identities") or not founder.get("verification_source"):
             raise Uncertain("Founder identity provenance is required.")
-        for identity in identities:
-            if not all(isinstance(identity.get(k), str) and identity[k] for k in ("platform", "user_id")):
-                raise Uncertain("Invalid founder identity.")
+        for identity in founder["identities"]:
+            _strings(identity, ("platform", "user_id"))
     if not isinstance(registry.get("trusted_chats"), list):
         raise Uncertain("Trusted chat list must be explicit.")
     keys = set()
     for entry in registry.get("collaborators", []):
-        fields = ("platform", "platform_user_id", "google_email", "venture", "approving_founder", "approval_source")
-        if not all(isinstance(entry.get(k), str) and entry[k] for k in fields):
-            raise Uncertain("Incomplete collaborator identity/approval.")
+        _strings(entry, ("platform", "platform_user_id", "google_email"))
+        _scope(entry, founders)
         key = tuple(entry[k] for k in ("platform", "platform_user_id", "venture"))
         if key in keys:
             raise Uncertain("Duplicate collaborator grant.")
         keys.add(key)
-        if entry["approving_founder"] not in founders or entry.get("status") not in {"active", "revoked"}:
-            raise Uncertain("Invalid approving founder or status.")
-        for field in ("approved_drive_folder_ids", "allowed_actions", "exclusions"):
-            values = entry.get(field)
-            if not isinstance(values, list) or not values or any(not isinstance(v, str) or not v for v in values):
-                raise Uncertain("Incomplete collaborator scope.")
-        if "approved_chats" in entry:
-            chats = entry["approved_chats"]
-            if not isinstance(chats, list) or not chats:
-                raise Uncertain("Chat-bound grants need explicit chat mappings.")
-            for chat in chats:
-                if not isinstance(chat, dict) or set(chat) != {"platform", "chat_id"} or any(
-                        not isinstance(chat[k], str) or not chat[k] for k in ("platform", "chat_id")):
-                    raise Uncertain("Invalid scoped chat mapping.")
-        if entry.get("resource_scope") != "venture_current_access":
-            raise Uncertain("Unsupported resource rule.")
-
-
-    route_keys = set()
+    keys = set()
     for route in registry.get("scoped_founder_routes", []):
-        if route.get("founder") not in founders or route.get("approving_founder") not in founders or not route.get("approval_source"):
+        _scope(route, founders)
+        if route.get("founder") not in founders:
             raise Uncertain("Scoped founder authority is unverified.")
-        if route.get("status") not in {"active", "revoked"} or route.get("resource_scope") != "venture_current_access":
-            raise Uncertain("Invalid scoped founder route.")
-        for field in ("venture",):
-            if not isinstance(route.get(field), str) or not route[field]:
-                raise Uncertain("Missing founder venture.")
-        for field in ("approved_drive_folder_ids", "allowed_actions", "exclusions"):
-            if not isinstance(route.get(field), list) or not route[field] or any(not isinstance(v,str) or not v for v in route[field]):
-                raise Uncertain("Incomplete scoped founder boundary.")
-        chats=route.get("approved_chats")
-        if not isinstance(chats,list) or not chats or any(not isinstance(c,dict) or set(c)!={"platform","chat_id"} or
-                any(not isinstance(c[k],str) or not c[k] for k in ("platform","chat_id")) for c in chats):
-            raise Uncertain("Founder route requires exact approved chats.")
-        key=(route["founder"],route["venture"])
-        if key in route_keys:raise Uncertain("Duplicate scoped founder route.")
-        route_keys.add(key)
+        _chats(route.get("approved_chats"))
+        key = (route["founder"], route["venture"])
+        if key in keys:
+            raise Uncertain("Duplicate scoped founder route.")
+        keys.add(key)
 
 
 def founder_context(registry, source):
