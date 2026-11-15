@@ -8,6 +8,6 @@ def test_chat_bound_grant_requires_exact_platform_and_chat(registry, source):
     validate(registry)
     with pytest.raises(MissingGrant): grant_for(registry,source,'test-project')
     source['chat_id']='content-test'
-    assert grant_for(registry,source,'test-project') is entry
+    assert grant_for(registry,source,'test-project')['google_email'] == entry['google_email']
     source['platform']='other-platform'
     with pytest.raises(MissingGrant): grant_for(registry,source,'test-project')

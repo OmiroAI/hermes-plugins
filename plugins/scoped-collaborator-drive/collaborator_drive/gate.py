@@ -27,9 +27,7 @@ def handle(frame, loader, config, state_dir, adapter_factory=GoogleDrive, worker
     if frame["kind"] != "message":
         return {"decision": "deny"}
     text = frame["text"]
-    matches = [e for e in current["collaborators"] if e["platform"] == source.get("platform")
-        and e["platform_user_id"] == source["user_id"] and e["status"] == "active"
-        and registry.chat_matches(e, source)]
+    matches = registry.effective_grants(current,source)
     if not matches:
         raise registry.MissingGrant("No active scoped grant for this account and chat.")
     if not isinstance(text, str) or not text.strip() or len(text) > 120000:

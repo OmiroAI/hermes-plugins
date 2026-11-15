@@ -85,6 +85,27 @@ def validate(registry):
             raise Uncertain("Unsupported resource rule.")
 
 
+    route_keys = set()
+    for route in registry.get("scoped_founder_routes", []):
+        if route.get("founder") not in founders or route.get("approving_founder") not in founders or not route.get("approval_source"):
+            raise Uncertain("Scoped founder authority is unverified.")
+        if route.get("status") not in {"active", "revoked"} or route.get("resource_scope") != "venture_current_access":
+            raise Uncertain("Invalid scoped founder route.")
+        for field in ("venture",):
+            if not isinstance(route.get(field), str) or not route[field]:
+                raise Uncertain("Missing founder venture.")
+        for field in ("approved_drive_folder_ids", "allowed_actions", "exclusions"):
+            if not isinstance(route.get(field), list) or not route[field] or any(not isinstance(v,str) or not v for v in route[field]):
+                raise Uncertain("Incomplete scoped founder boundary.")
+        chats=route.get("approved_chats")
+        if not isinstance(chats,list) or not chats or any(not isinstance(c,dict) or set(c)!={"platform","chat_id"} or
+                any(not isinstance(c[k],str) or not c[k] for k in ("platform","chat_id")) for c in chats):
+            raise Uncertain("Founder route requires exact approved chats.")
+        key=(route["founder"],route["venture"])
+        if key in route_keys:raise Uncertain("Duplicate scoped founder route.")
+        route_keys.add(key)
+
+
 def founder_context(registry, source):
     identity = {"platform": source.get("platform"), "user_id": source.get("user_id")}
     known = any(identity in f["identities"] for f in registry["founders"].values())
@@ -99,11 +120,23 @@ def chat_matches(entry, source):
     } in entry["approved_chats"]
 
 
+def effective_grants(registry, source):
+    """Authority stays in protected records; an ordinary grant cannot select service access."""
+    identity={"platform":source.get("platform"),"user_id":source.get("user_id")}
+    ordinary=[dict(e,_scope_kind="collaborator") for e in registry["collaborators"]
+        if e["platform"]==identity["platform"] and e["platform_user_id"]==identity["user_id"]
+        and e["status"]=="active" and chat_matches(e,source)]
+    founders=registry["founders"]
+    delegated=[dict(route,_scope_kind="founder_service") for route in registry.get("scoped_founder_routes",[])
+        if route["status"]=="active" and route.get("approving_founder") in founders and route.get("approval_source")
+        and identity in founders[route["founder"]]["identities"] and chat_matches(route,source)]
+    return ordinary+delegated
+
+
 def grant_for(registry, source, venture):
     if registry.get("activation") != "active":
-        raise Uncertain("Collaborator work is paused.")
-    found = [e for e in registry["collaborators"] if e["platform"] == source.get("platform")
-             and e["platform_user_id"] == source.get("user_id") and e["venture"] == venture and chat_matches(e, source)]
-    if len(found) != 1 or found[0]["status"] != "active":
+        raise Uncertain("Scoped work is paused.")
+    found = [e for e in effective_grants(registry,source) if e["venture"]==venture]
+    if len(found) != 1:
         raise MissingGrant("No unique active scoped grant.")
     return found[0]

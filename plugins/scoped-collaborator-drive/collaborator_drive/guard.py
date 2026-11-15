@@ -71,15 +71,26 @@ def authorize(registry, adapter, source, venture, action, target, operation):
     chain = ancestry(adapter, target)
     if not any(m["id"] in entry["approved_drive_folder_ids"] for m in chain):
         raise Denied("Resource is outside the approved venture.")
+    if entry.get("_scope_kind") == "founder_service":
+        caps=chain[0].get("capabilities",{})
+        capability = "canAddChildren" if operation=="create" else "canEdit" if operation=="edit" else (
+            "canListChildren" if chain[0].get("mimeType")==FOLDER else "canDownload")
+        if caps.get(capability) is not True:
+            raise PermissionUncertain("Service Drive capability is unavailable.")
+        roles = EDIT if caps.get("canEdit") is True or operation=="create" else READ-EDIT
+        direct = True  # Effective service capability is authoritative for limited-access ancestry.
+    else:
+        roles, direct = None, False
     try:
-        acl = adapter.permissions(target)
+        acl = adapter.permissions(target) if roles is None or operation!="read" else []
     except Exception as exc:
         raise PermissionUncertain("Drive permissions could not be established.") from exc
-    roles, direct = user_roles(acl, entry["google_email"])
+    if roles is None:
+        roles, direct = user_roles(acl, entry["google_email"])
     if any(m.get("inheritedPermissionsDisabled") for m in chain) and not direct:
         raise PermissionUncertain("Limited-access ancestry needs direct permission evidence.")
     if not roles & (READ if operation == "read" else EDIT):
-        raise Denied("Collaborator lacks the required role.")
+        raise Denied("Required Drive role is unavailable.")
     if operation != "read" and any(p.get("type") in {"group", "domain", "anyone"} or p.get("view") for p in acl):
         raise PermissionUncertain("Broad or published write audiences need separate approval.")
     item = chain[0]

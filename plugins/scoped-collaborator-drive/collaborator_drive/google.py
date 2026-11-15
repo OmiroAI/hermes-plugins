@@ -3,7 +3,7 @@ from .registry import Uncertain
 from .guard import DOC
 
 FIELDS = ("id,name,mimeType,parents,trashed,driveId,inheritedPermissionsDisabled,"
-          "copyRequiresWriterPermission,contentRestrictions,downloadRestrictions,clientEncryptionDetails")
+          "copyRequiresWriterPermission,contentRestrictions,downloadRestrictions,clientEncryptionDetails,capabilities(canEdit,canAddChildren,canListChildren,canDownload)")
 PERMISSIONS = ("nextPageToken,permissions(id,type,emailAddress,role,deleted,expirationTime,"
                "pendingOwner,view,permissionDetails,inheritedPermissionsDisabled)")
 
