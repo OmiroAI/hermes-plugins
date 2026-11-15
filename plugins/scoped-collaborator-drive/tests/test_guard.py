@@ -60,7 +60,7 @@ def test_permission_checker_error_propagates_without_read(registry, drive, sourc
     def unavailable(_):
         raise TimeoutError()
     drive.permissions = unavailable
-    with pytest.raises(TimeoutError):
+    with pytest.raises(Uncertain):
         check(registry, drive, source)
     assert drive.calls == []
 

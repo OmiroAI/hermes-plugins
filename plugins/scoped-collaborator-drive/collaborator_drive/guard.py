@@ -16,7 +16,10 @@ def ancestry(adapter, target):
         if target in seen:
             raise PermissionUncertain("Ambiguous ancestry.")
         seen.add(target)
-        item = adapter.metadata(target)
+        try:
+            item = adapter.metadata(target)
+        except Exception as exc:
+            raise PermissionUncertain("Drive metadata could not be established.") from exc
         if item.get("id") != target:
             raise PermissionUncertain("Metadata identity mismatch.")
         if item.get("trashed"):
@@ -68,7 +71,10 @@ def authorize(registry, adapter, source, venture, action, target, operation):
     chain = ancestry(adapter, target)
     if not any(m["id"] in entry["approved_drive_folder_ids"] for m in chain):
         raise Denied("Resource is outside the approved venture.")
-    acl = adapter.permissions(target)
+    try:
+        acl = adapter.permissions(target)
+    except Exception as exc:
+        raise PermissionUncertain("Drive permissions could not be established.") from exc
     roles, direct = user_roles(acl, entry["google_email"])
     if any(m.get("inheritedPermissionsDisabled") for m in chain) and not direct:
         raise PermissionUncertain("Limited-access ancestry needs direct permission evidence.")
