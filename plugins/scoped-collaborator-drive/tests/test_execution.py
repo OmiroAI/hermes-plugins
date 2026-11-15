@@ -1,5 +1,7 @@
+import copy
 import pytest
 from collaborator_drive.executor import Executor
+from collaborator_drive.gate import handle
 from collaborator_drive.registry import Denied, Uncertain
 
 
@@ -45,14 +47,47 @@ def test_model_identity_and_unavailable_operations_denied(registry, drive, sourc
     assert drive.calls == []
 
 
+def frame(source, kind="message"):
+    return {"version": 1, "kind": kind, "source": source, "text": "review my document", "message_id": "test-message"}
 
 
+def test_founder_private_and_trusted_group_only(registry, source, tmp_path):
+    source["user_id"] = "owner-test"
+    assert handle(frame(source), lambda: registry, {}, tmp_path) == {"decision": "allow"}
+    source.update(chat_type="supergroup", chat_id="trusted-test")
+    assert handle(frame(source), lambda: registry, {}, tmp_path)["decision"] == "allow"
+    source["chat_id"] = "external-test"
+    with pytest.raises(Denied):
+        handle(frame(source), lambda: registry, {}, tmp_path)
 
 
+def test_group_output_and_controls_do_not_expose_source(registry, source, drive, tmp_path):
+    tmp_path.chmod(0o700)
+    source["chat_type"] = "group"
+    worker = lambda text, executor, config: "private source text"
+    result = handle(frame(source), lambda: registry, {}, tmp_path, lambda: drive, worker)
+    assert result["decision"] == "deny" and "private source text" not in result["reply"]
+    for kind in ("reaction", "platform_event", "callback"):
+        assert handle(frame(source, kind), lambda: registry, {}, tmp_path) == {"decision": "deny"}
 
 
+def test_source_identity_unknown_and_policy_paused(registry, source, drive, tmp_path):
+    tmp_path.chmod(0o700)
+    source["user_id"] = None
+    with pytest.raises(Denied):
+        handle(frame(source), lambda: registry, {}, tmp_path)
+    source["user_id"] = "collaborator-test"
+    registry["activation"] = "paused"
+    with pytest.raises(Uncertain):
+        handle(frame(source), lambda: registry, {}, tmp_path)
 
 
+def test_multiple_ventures_require_explicit_selection(registry, source, tmp_path):
+    other = copy.deepcopy(registry["collaborators"][0])
+    other["venture"] = "other-project"
+    registry["collaborators"].append(other)
+    with pytest.raises(Denied):
+        handle(frame(source), lambda: registry, {}, tmp_path)
 
 
 def test_formatted_document_replacement_pauses_without_mutation(registry, source, drive, tmp_path):
@@ -84,8 +119,29 @@ def test_write_readback_failure_cannot_be_blindly_retried(registry, source, driv
     assert drive.calls == ["write"]
 
 
+def test_permission_failure_pauses_entire_worker_before_delivery(registry, source, drive, tmp_path):
+    from collaborator_drive.worker import respond
+    from types import SimpleNamespace
+    run = executor(registry, drive, source, tmp_path)
+    call = SimpleNamespace(id="test-tool", function=SimpleNamespace(name="scoped_drive", arguments='{"operation":"inspect","target":"private_test_id","action":"draft","body":""}'))
+    class Message:
+        tool_calls = [call]
+        def model_dump(self, **kwargs):
+            return {"role": "assistant", "content": None}
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: SimpleNamespace(choices=[SimpleNamespace(message=Message())]))))
+    with pytest.raises(Denied):
+        respond("review", run, {"model": "synthetic-model"}, client=client)
+    assert drive.calls == []
 
 
+def test_group_delivery_contains_only_verified_draft_link(registry, source, drive, tmp_path):
+    tmp_path.chmod(0o700)
+    source["chat_type"] = "group"
+    def worker(text, executor, config):
+        executor.execute(arguments("create_draft", target="project_root_test"))
+        return "private draft body"
+    result = handle(frame(source), lambda: registry, {}, tmp_path, lambda: drive, worker)
+    assert result == {"decision": "deny", "reply": "https://docs.google.com/document/d/new_document_test"}
 
 
 def test_folder_listing_filters_inaccessible_children(registry, source, drive, tmp_path):

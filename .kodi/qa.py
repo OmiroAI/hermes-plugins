@@ -27,7 +27,7 @@ if profile in ('python','hardware-python'):
     if tests.is_dir(): run(sys.executable,'-m','pytest','tests','-q','-p','no:cacheprovider')
     print(f'Validated {len(paths)} Python sources; hardware and network integration require a bench check.')
 elif profile=='hermes':
-    run(sys.executable,'-m','pytest','plugins/telegram-session-reset-handoff/tests','-q','-p','no:cacheprovider')
+    run(sys.executable,'-m','pytest','plugins/telegram-session-reset-handoff/tests','plugins/scoped-collaborator-drive/tests','-q','-p','no:cacheprovider')
 elif profile=='astro':
     run('npm','run','build')
 elif profile=='static':
