@@ -4,8 +4,8 @@ from .registry import Denied, Uncertain
 
 
 def respond_responses(text, executor, config, client):
-    from .worker import TOOL, instructions
-    function = TOOL["function"]
+    from .worker import scoped_tool, instructions
+    function = scoped_tool(config)["function"]
     tool = {"type": "function", **function}
     items = [{"role": "user", "content": text}]
     for _ in range(8):

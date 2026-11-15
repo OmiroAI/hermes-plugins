@@ -131,7 +131,7 @@ def test_permission_failure_pauses_entire_worker_before_delivery(registry, sourc
             return {"role": "assistant", "content": None}
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: SimpleNamespace(choices=[SimpleNamespace(message=Message())]))))
     with pytest.raises(Denied):
-        respond("review", run, {"model": "synthetic-model"}, client=client)
+        respond("review", run, {"model": "synthetic-model", "allowed_actions": ["draft"]}, client=client)
     assert drive.calls == []
 
 

@@ -23,12 +23,14 @@ def test_responses_tool_loop_and_recheck():
     def create(**kwargs):
         assert kwargs["store"] is False and kwargs["stream"] is True
         assert kwargs["tools"][0]["name"] == "scoped_drive"
+        assert kwargs["tools"][0]["strict"] is True
+        assert kwargs["tools"][0]["parameters"]["properties"]["action"]["enum"] == ["draft"]
         seen.append(kwargs)
         return streams[len(seen)-1]
     checked = []
     executor = SimpleNamespace(execute=lambda args: {"status":"verified"}, recheck=lambda: checked.append(True))
     client = SimpleNamespace(responses=SimpleNamespace(create=create))
-    assert respond_responses("test", executor, {"model":"synthetic"}, client) == "done"
+    assert respond_responses("test", executor, {"model":"synthetic","allowed_actions":["draft"]}, client) == "done"
     assert checked and all(s.closed for s in streams)
 
 
@@ -36,5 +38,5 @@ def test_unknown_response_tool_denies():
     stream = Stream([{"type":"function_call","name":"shell","arguments":"{}","call_id":"synthetic"}])
     client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: stream))
     with pytest.raises(Denied):
-        respond_responses("test", None, {"model":"synthetic"}, client)
+        respond_responses("test", None, {"model":"synthetic","allowed_actions":["draft"]}, client)
     assert stream.closed

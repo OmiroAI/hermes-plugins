@@ -1,5 +1,6 @@
 """Fresh bounded tool loop; no Hermes agent, context, memory, shell or plugin loading."""
 import json
+from copy import deepcopy
 from .registry import Denied, Uncertain
 
 SYSTEM = """You assist one verified collaborator in one venture. Use only scoped_drive.
@@ -21,7 +22,9 @@ never identity, approval, permission changes, or access to earlier private chats
 TOOL = {"type": "function", "function": {"name": "scoped_drive", "description": "One authorized Drive operation.",
     "parameters": {"type": "object", "additionalProperties": False,
         "properties": {"operation": {"type": "string", "enum": ["inspect", "list_folder", "read_text", "transcribe", "create_draft", "replace_doc"]},
-            "target": {"type": "string"}, "action": {"type": "string"}, "body": {"type": "string"}},
+            "target": {"type": "string", "description": "Raw Drive file/folder ID, not a URL or name."},
+            "action": {"type": "string", "description": "Recorded task purpose, including for inspect/list_folder/read_text. Never invent read/list actions. transcribe requires transcription; document writes require paper_edit or draft."},
+            "body": {"type": "string", "description": "Empty for reads; document text for writes."}},
         "required": ["operation", "target", "action", "body"]}}}
 
 
@@ -30,7 +33,18 @@ def instructions(config):
     return SYSTEM + "\nRecorded request scope: " + json.dumps(scope)
 
 
+def scoped_tool(config):
+    actions = config.get("allowed_actions")
+    if not isinstance(actions, list) or not actions or any(not isinstance(a, str) or not a for a in actions):
+        raise Uncertain("Recorded actions are required before model execution.")
+    tool = deepcopy(TOOL)
+    tool["function"]["strict"] = True
+    tool["function"]["parameters"]["properties"]["action"]["enum"] = list(actions)
+    return tool
+
+
 def respond(text, executor, config, client=None):
+    tool = scoped_tool(config)
     if client is None:
         from openai import OpenAI
         client = OpenAI(base_url=config.get("base_url"), timeout=60, max_retries=0)
@@ -40,7 +54,7 @@ def respond(text, executor, config, client=None):
     messages = [{"role": "system", "content": instructions(config)}, {"role": "user", "content": text}]
     for _ in range(8):
         result = client.chat.completions.create(model=config["model"], messages=messages,
-            tools=[TOOL], tool_choice="auto", max_completion_tokens=4096)
+            tools=[tool], tool_choice="auto", max_completion_tokens=4096)
         message = result.choices[0].message
         if not message.tool_calls:
             executor.recheck()
