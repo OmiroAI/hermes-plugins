@@ -16,6 +16,11 @@ TOOL = {"type": "function", "function": {"name": "scoped_drive", "description": 
         "required": ["operation", "target", "action", "body"]}}}
 
 
+def instructions(config):
+    scope = {key: config[key] for key in ("venture", "allowed_actions", "exclusions") if key in config}
+    return SYSTEM + "\nRecorded request scope: " + json.dumps(scope)
+
+
 def respond(text, executor, config, client=None):
     if client is None:
         from openai import OpenAI
@@ -23,7 +28,7 @@ def respond(text, executor, config, client=None):
     if config.get("api_mode") == "responses":
         from .responses import respond_responses
         return respond_responses(text, executor, config, client)
-    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}]
+    messages = [{"role": "system", "content": instructions(config)}, {"role": "user", "content": text}]
     for _ in range(8):
         result = client.chat.completions.create(model=config["model"], messages=messages,
             tools=[TOOL], tool_choice="auto", max_completion_tokens=4096)

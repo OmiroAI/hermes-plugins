@@ -41,7 +41,7 @@ def handle(frame, loader, config, state_dir, adapter_factory=GoogleDrive, worker
         venture = matches[0]["venture"]
     else:
         raise registry.Denied("Choose one approved venture explicitly.")
-    registry.grant_for(current, source, venture)
+    entry = registry.grant_for(current, source, venture)
     if not isinstance(text, str) or not text.strip() or len(text) > 120000:
         raise registry.Denied("Invalid request text.")
     info = os.stat(state_dir)
@@ -52,7 +52,8 @@ def handle(frame, loader, config, state_dir, adapter_factory=GoogleDrive, worker
     with (Path(state_dir) / ("lock-" + key)).open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         executor = Executor(loader, adapter_factory(), source, venture, state_dir, frame["message_id"], config)
-        result = worker(text, executor, config)
+        request_config = dict(config, venture=venture, allowed_actions=entry["allowed_actions"], exclusions=entry["exclusions"])
+        result = worker(text, executor, request_config)
         executor.recheck()
         if source.get("chat_type") not in {"private", "dm"}:
             links = ["https://docs.google.com/document/d/" + target for target, _ in executor.drafts]

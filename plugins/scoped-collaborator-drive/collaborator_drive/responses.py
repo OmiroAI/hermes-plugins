@@ -4,12 +4,12 @@ from .registry import Denied, Uncertain
 
 
 def respond_responses(text, executor, config, client):
-    from .worker import SYSTEM, TOOL
+    from .worker import TOOL, instructions
     function = TOOL["function"]
     tool = {"type": "function", **function}
     items = [{"role": "user", "content": text}]
     for _ in range(8):
-        stream = client.responses.create(model=config["model"], instructions=SYSTEM,
+        stream = client.responses.create(model=config["model"], instructions=instructions(config),
             input=items, tools=[tool], tool_choice="auto", store=False, stream=True)
         response = None
         try:

@@ -159,3 +159,15 @@ def test_transcription_requires_recorded_action_and_configured_adapter(registry,
     with pytest.raises(Uncertain):
         run.execute(arguments("transcribe", action="transcription"))
     assert drive.calls == []
+
+
+def test_worker_receives_recorded_scope_without_identity_details(registry, source, drive, tmp_path):
+    tmp_path.chmod(0o700)
+    seen = []
+    def worker(text, executor, config):
+        seen.append(config)
+        return "ready"
+    handle(frame(source), lambda: registry, {}, tmp_path, lambda: drive, worker)
+    assert seen[0]["venture"] == "test-project"
+    assert seen[0]["allowed_actions"] == registry["collaborators"][0]["allowed_actions"]
+    assert "google_email" not in seen[0] and "platform_user_id" not in seen[0]
