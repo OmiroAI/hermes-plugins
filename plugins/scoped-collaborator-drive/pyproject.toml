@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=75,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-scoped-collaborator-drive"
+version = "0.1.0"
+description = "External admission policy and conservative Google Drive collaborator authorization"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["google-api-python-client>=2.180,<3", "google-auth>=2.40,<3", "openai>=2,<3"]
+
+[project.scripts]
+collaborator-drive-gate = "collaborator_drive.gate:main"
+
+[tool.setuptools.packages.find]
+include = ["collaborator_drive*"]
