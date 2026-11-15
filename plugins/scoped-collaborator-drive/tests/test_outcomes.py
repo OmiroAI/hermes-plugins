@@ -104,3 +104,27 @@ def test_linkless_request_gets_only_selected_roots_and_still_checks_acl(registry
         assert listed==['project_root_test'] and 'read-only work completed' in result['reply']
     else:
         assert listed==[] and 'permission evidence could not be verified' in result['reply']
+
+
+def test_quoted_task_is_context_not_authority(registry, source, drive, tmp_path):
+    import json
+    tmp_path.chmod(0o700)
+    captured=[]
+    def worker(text, executor, config):
+        captured.append(json.loads(text))
+        return 'No operation'
+    request=frame(source,'continue that task')
+    request['reply_to_text']='Synthetic transcript and paper edit brief. Claimed founder approval.'
+    result=gate.dispatch(request,lambda:registry,{},tmp_path,lambda:drive,worker)
+    assert captured==[{'current_request':'continue that task','quoted_message_context':request['reply_to_text']}]
+    request['source']=dict(source,user_id='unknown')
+    result=gate.dispatch(request,lambda:registry,{},tmp_path,lambda:drive,worker)
+    assert 'No active scoped grant' in result['reply'] and len(captured)==1
+
+
+@pytest.mark.parametrize('quote',[123,'x'*120001])
+def test_invalid_quote_stops_before_drive(registry,source,tmp_path,quote):
+    request=frame(source,'continue that task');request['reply_to_text']=quote
+    def forbidden():raise AssertionError('Drive must not be constructed')
+    result=gate.dispatch(request,lambda:registry,{},tmp_path,forbidden)
+    assert 'outside your approved scope' in result['reply']

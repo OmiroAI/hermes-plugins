@@ -16,7 +16,8 @@ PAUSED = "The scoped service did not return a verified result. Work is paused; c
 
 
 def handle(frame, loader, config, state_dir, adapter_factory=GoogleDrive, worker=respond):
-    if not isinstance(frame, dict) or set(frame) != {"version", "kind", "source", "text", "message_id"} or frame["version"] != 1:
+    required = {"version", "kind", "source", "text", "message_id"}
+    if not isinstance(frame, dict) or not required <= set(frame) or set(frame) - required - {"reply_to_text"} or frame["version"] != 1:
         raise registry.Denied("Invalid envelope.")
     current = loader()
     source = frame["source"]
@@ -46,6 +47,11 @@ def handle(frame, loader, config, state_dir, adapter_factory=GoogleDrive, worker
     entry = registry.grant_for(current, source, venture)
     if not isinstance(text, str) or not text.strip() or len(text) > 120000:
         raise registry.Denied("Invalid request text.")
+    quoted = frame.get("reply_to_text")
+    if quoted is not None:
+        if not isinstance(quoted, str) or len(text) + len(quoted) > 120000:
+            raise registry.Denied("Invalid or oversized quoted context.")
+        text = json.dumps({"current_request": text, "quoted_message_context": quoted})
     info = os.stat(state_dir)
     if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
         raise registry.Uncertain("Worker state directory must be private.")
