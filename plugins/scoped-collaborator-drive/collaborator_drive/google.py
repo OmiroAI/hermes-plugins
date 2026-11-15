@@ -5,7 +5,7 @@ from .guard import DOC
 FIELDS = ("id,name,mimeType,parents,trashed,driveId,inheritedPermissionsDisabled,"
           "copyRequiresWriterPermission,contentRestrictions,downloadRestrictions,clientEncryptionDetails")
 PERMISSIONS = ("nextPageToken,permissions(id,type,emailAddress,role,deleted,expirationTime,"
-               "pendingOwner,view,permissionDetails)")
+               "pendingOwner,view,permissionDetails,inheritedPermissionsDisabled)")
 
 
 class GoogleDrive:
