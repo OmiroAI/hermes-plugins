@@ -1,0 +1,6 @@
+**
+!plugins/
+!plugins/scoped-collaborator-drive/
+!plugins/scoped-collaborator-drive/pyproject.toml
+!plugins/scoped-collaborator-drive/collaborator_drive/
+!plugins/scoped-collaborator-drive/collaborator_drive/*.py
